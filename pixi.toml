@@ -1,0 +1,40 @@
+[project]
+name = "distilabel"
+version = "0.1.0"
+description = "Distilabel is an AI Feedback (AIF) framework for building datasets with and for LLMs."
+authors = ["Argilla <admin@argilla.io>"]
+channels = ["conda-forge"]
+platforms = ["osx-64", "linux-64", "win-64"]
+
+[dependencies]
+black = "*"
+python = ">=3.12"
+datasets = ">=2.16.0"
+httpx = ">=0.25.2"
+jinja2 = ">=3.1.2"
+multiprocess = ">=0.70"
+nest-asyncio = ">=1.6.0"
+networkx = ">=3.0"
+pydantic = ">=2.0"
+rich = ">=13.5.0"
+scipy = ">=1.10.0"
+typer = ">=0.9.0"
+tblib = ">=3.0.0"
+orjson = ">=3.10.0"
+universal_pathlib = ">=0.2.2"
+portalocker = ">=2.8.2"
+ruff = ">=0.6.2"
+pre-commit = ">=3.5.0"
+pytest = ">=7.4.0"
+pytest-asyncio = "*"
+pytest-timeout = "*"
+pytest-codspeed = "*"
+
+[feature.dev]
+dependencies = { ruff = ">=0.6.2", pre-commit = ">=3.5.0" }
+
+[feature.docs]
+dependencies = { mkdocs-material = ">=9.5.17", mkdocstrings = ">=0.24.0", mkdocs-literate-nav = ">=0.6.1", mkdocs-section-index = ">=0.3.8", mkdocs-gen-files = ">=0.5.0", mike = ">=2.0.0", pillow = ">=9.5.0", cairosvg = ">=2.7.1", mknotebooks = ">=0.8.0", pandas = ">=2.0" }
+
+[feature.tests]
+dependencies = { pytest = ">=7.4.0", pytest-asyncio = "*", nest-asyncio = "*", pytest-timeout = "*", pytest-codspeed = "*" }

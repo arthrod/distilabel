@@ -77,4 +77,6 @@ venv.bak/
 # Other
 *.log
 *.swp
-.DS_Store
+.DS_Store# pixi environments
+.pixi
+*.egg-info

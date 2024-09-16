@@ -1,0 +1,3757 @@
+quickstart.md
+---
+description: Distilabel is an AI Feedback (AIF) framework for building datasets with and for LLMs.
+hide:
+  - toc
+---
+
+# Quickstart
+
+To start off, `distilabel` is a framework for building pipelines for generating synthetic data using LLMs, that defines a [`Pipeline`][distilabel.pipeline.Pipeline] which orchestrates the execution of the [`Step`][distilabel.steps.base.Step] subclasses, and those will be connected as nodes in a Direct Acyclic Graph (DAG).
+
+That being said, in this guide we will walk you through the process of creating a simple pipeline that uses the [`OpenAILLM`][distilabel.llms.OpenAILLM] class to generate text. The [`Pipeline`][distilabel.pipeline.Pipeline] will load a dataset that contains a column named `prompt` from the Hugging Face Hub via the step [`LoadDataFromHub`][distilabel.steps.LoadDataFromHub] and then use the [`OpenAILLM`][distilabel.llms.OpenAILLM] class to generate text based on the dataset using the [`TextGeneration`][distilabel.steps.tasks.TextGeneration] task.
+
+```python
+from distilabel.llms import OpenAILLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps import LoadDataFromHub
+from distilabel.steps.tasks import TextGeneration
+
+with Pipeline(  # (1)
+    name="simple-text-generation-pipeline",
+    description="A simple text generation pipeline",
+) as pipeline:  # (2)
+    load_dataset = LoadDataFromHub(  # (3)
+        name="load_dataset",
+        output_mappings={"prompt": "instruction"},
+    )
+
+    text_generation = TextGeneration(  # (4)
+        name="text_generation",
+        llm=OpenAILLM(model="gpt-3.5-turbo"),  # (5)
+    )
+
+    load_dataset >> text_generation  # (6)
+
+if __name__ == "__main__":
+    distiset = pipeline.run(  # (7)
+        parameters={
+            load_dataset.name: {
+                "repo_id": "distilabel-internal-testing/instruction-dataset-mini",
+                "split": "test",
+            },
+            text_generation.name: {
+                "llm": {
+                    "generation_kwargs": {
+                        "temperature": 0.7,
+                        "max_new_tokens": 512,
+                    }
+                }
+            },
+        },
+    )
+    distiset.push_to_hub(repo_id="distilabel-example")  # (8)
+```
+
+1. We define a [`Pipeline`][distilabel.pipeline.Pipeline] with the name `simple-text-generation-pipeline` and a description `A simple text generation pipeline`. Note that the `name` is mandatory and will be used to calculate the `cache` signature path, so changing the name will change the cache path and will be identified as a different pipeline.
+
+2. We are using the [`Pipeline`][distilabel.pipeline.Pipeline] context manager, meaning that every [`Step`][distilabel.steps.base.Step] subclass that is defined within the context manager will be added to the pipeline automatically.
+
+3. We define a [`LoadDataFromHub`][distilabel.steps.LoadDataFromHub] step named `load_dataset` that will load a dataset from the Hugging Face Hub, as provided via runtime parameters in the `pipeline.run` method below, but it can also be defined within the class instance via the arg `repo_id=...`. This step will basically produce output batches with the rows from the dataset, and the column `prompt` will be mapped to the `instruction` field.
+
+4. We define a [`TextGeneration`][distilabel.steps.tasks.TextGeneration] task named `text_generation` that will generate text based on the `instruction` field from the dataset. This task will use the [`OpenAILLM`][distilabel.llms.OpenAILLM] class with the model `gpt-3.5-turbo`.
+
+5. We define the [`OpenAILLM`][distilabel.llms.OpenAILLM] class with the model `gpt-3.5-turbo` that will be used by the [`TextGeneration`][distilabel.steps.tasks.TextGeneration] task. In this case, since the [`OpenAILLM`][distilabel.llms.OpenAILLM] is used, we assume that the `OPENAI_API_KEY` environment variable is set, and the OpenAI API will be used to generate the text.
+
+6. We connect the `load_dataset` step to the `text_generation` task using the `rshift` operator, meaning that the output from the `load_dataset` step will be used as input for the `text_generation` task.
+
+7. We run the pipeline with the parameters for the `load_dataset` and `text_generation` steps. The `load_dataset` step will use the repository `distilabel-internal-testing/instruction-dataset-mini` and the `test` split, and the `text_generation` task will use the `generation_kwargs` with the `temperature` set to `0.7` and the `max_new_tokens` set to `512`.
+
+8. Optionally, we can push the generated [`Distiset`][distilabel.distiset.Distiset] to the Hugging Face Hub repository `distilabel-example`. This will allow you to share the generated dataset with others and use it in other pipelines.
+
+## Minimal example
+
+`distilabel` gives a lot of flexibility to create your pipelines, but to start right away, you can omit a lot of the details and let default values:
+
+```python
+from distilabel.llms import InferenceEndpointsLLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps.tasks import TextGeneration
+from datasets import load_dataset
+
+
+dataset = load_dataset("distilabel-internal-testing/instruction-dataset-mini", split="test")
+
+with Pipeline() as pipeline:  # (1)
+    TextGeneration(llm=InferenceEndpointsLLM(model_id="meta-llama/Meta-Llama-3.1-8B-Instruct"))  # (2)
+
+
+if __name__ == "__main__":    
+    distiset = pipeline.run(dataset=dataset)  # (3)
+    distiset.push_to_hub(repo_id="distilabel-example")
+```
+
+1. The [`Pipeline`][distilabel.pipeline.Pipeline] can take no arguments and generate a default name on it's own that will be tracked internally.
+
+2. Just as with the [`Pipeline`][distilabel.pipeline.Pipeline], the [`Step`][distilabel.steps.base.Step]s don't explicitly need a name.
+
+3. You can generate the dataset as you would normally do with Hugging Face and pass the dataset to the run method.
+
+
+index.md
+# Execute Steps and Tasks in a Pipeline
+
+## How to create a pipeline
+
+[`Pipeline`][distilabel.pipeline.Pipeline] organise the Steps and Tasks in a sequence, where the output of one step is the input of the next one.
+A [`Pipeline`][distilabel.pipeline.Pipeline] should be created by making use of the context manager along with passing a **name**, and optionally a **description**.
+
+```python
+from distilabel.pipeline import Pipeline
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    ...
+```
+
+### Connecting steps with the `Step.connect` method
+
+Now, we can define the steps of our [`Pipeline`][distilabel.pipeline.Pipeline].
+
+!!! NOTE
+    Steps without predecessors (i.e. root steps), need to be [`GeneratorStep`][distilabel.steps.GeneratorStep]s such as [`LoadDataFromDicts`][distilabel.steps.LoadDataFromDicts] or [`LoadDataFromHub`][distilabel.steps.LoadDataFromHub]. After this, other steps can be defined.
+
+
+```python
+from distilabel.pipeline import Pipeline
+from distilabel.steps import LoadDataFromHub
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(name="load_dataset")
+    ...
+```
+
+!!! Tip "Easily load your datasets"
+
+    If you are already used to work with Hugging Face's `Dataset` via `load_dataset` or `pd.DataFrame`, you can create the `GeneratorStep` directly from the dataset (or dataframe), and create the step with the help of [`make_generator_step`][distilabel.steps.generators.utils.make_generator_step]:
+
+    === "From a list of dicts"
+
+        ```python
+        from distilabel.pipeline import Pipeline
+        from distilabel.steps import make_generator_step
+
+        dataset = [{"instruction": "Tell me a joke."}]
+
+        with Pipeline("pipe-name", description="My first pipe") as pipeline:
+            loader = make_generator_step(dataset, output_mappings={"prompt": "instruction"})
+            ...
+        ```
+
+    === "From `datasets.Dataset`"
+
+        ```python
+        from datasets import load_dataset
+        from distilabel.pipeline import Pipeline
+        from distilabel.steps import make_generator_step
+
+        dataset = load_dataset(
+            "DIBT/10k_prompts_ranked",
+            split="train"
+        ).filter(
+            lambda r: r["avg_rating"]>=4 and r["num_responses"]>=2
+        ).select(range(500))
+
+        with Pipeline("pipe-name", description="My first pipe") as pipeline:
+            loader = make_generator_step(dataset, output_mappings={"prompt": "instruction"})
+            ...
+        ```
+
+    === "From `pd.DataFrame`"
+
+        ```python
+        import pandas as pd
+        from distilabel.pipeline import Pipeline
+        from distilabel.steps import make_generator_step
+
+        dataset = pd.read_csv("path/to/dataset.csv")
+
+        with Pipeline("pipe-name", description="My first pipe") as pipeline:
+            loader = make_generator_step(dataset, output_mappings={"prompt": "instruction"})
+            ...
+        ```
+
+Next, we will use `prompt` column from the dataset obtained through `LoadDataFromHub` and use several `LLM`s to execute a `TextGeneration` task. We will also use the `Task.connect()` method to connect the steps, so the output of one step is the input of the next one.
+
+!!! NOTE
+    The order of the execution of the steps will be determined by the connections of the steps. In this case, the `TextGeneration` tasks will be executed after the `LoadDataFromHub` step.
+
+```python
+from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps import LoadDataFromHub
+from distilabel.steps.tasks import TextGeneration
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(name="load_dataset")
+
+    for llm in (
+        OpenAILLM(model="gpt-4-0125-preview"),
+        MistralLLM(model="mistral-large-2402"),
+        VertexAILLM(model="gemini-1.5-pro"),
+    ):
+        task = TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+        task.connect(load_dataset)
+
+    ...
+```
+
+For each row of the dataset, the `TextGeneration` task will generate a text based on the `instruction` column and the `LLM` model, and store the result (a single string) in a new column called `generation`. Because we need to have the `response`s in the same column, we will add `GroupColumns` to combine them all in the same column as a list of strings.
+
+!!! NOTE
+    In this case, the `GroupColumns` tasks will be executed after all `TextGeneration` steps.
+
+```python
+from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps import GroupColumns, LoadDataFromHub
+from distilabel.steps.tasks import TextGeneration
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(name="load_dataset")
+
+    combine_generations = GroupColumns(
+        name="combine_generations",
+        columns=["generation", "model_name"],
+        output_columns=["generations", "model_names"],
+    )
+
+    for llm in (
+        OpenAILLM(model="gpt-4-0125-preview"),
+        MistralLLM(model="mistral-large-2402"),
+        VertexAILLM(model="gemini-1.5-pro"),
+    ):
+        task = TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+        load_dataset.connect(task)
+        task.connect(combine_generations)
+```
+
+### Connecting steps with the `>>` operator
+
+Besides the `Step.connect` method: `step1.connect(step2)`, there's an alternative way by making use of the `>>` operator. We can connect steps in a more readable way, and it's also possible to connect multiple steps at once.
+
+=== "Step per step"
+
+    Each call to `step1.connect(step2)` has been exchanged by `step1 >> step2` within the loop.
+
+    ```python
+    from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+    from distilabel.pipeline import Pipeline
+    from distilabel.steps import GroupColumns, LoadDataFromHub
+    from distilabel.steps.tasks import TextGeneration
+
+    with Pipeline("pipe-name", description="My first pipe") as pipeline:
+        load_dataset = LoadDataFromHub(name="load_dataset")
+
+        combine_generations = GroupColumns(
+            name="combine_generations",
+            columns=["generation", "model_name"],
+            output_columns=["generations", "model_names"],
+        )
+
+        for llm in (
+            OpenAILLM(model="gpt-4-0125-preview"),
+            MistralLLM(model="mistral-large-2402"),
+            VertexAILLM(model="gemini-1.5-pro"),
+        ):
+            task = TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+            load_dataset >> task >> combine_generations
+    ```
+
+=== "Multiple steps at once"
+
+    Each task is first appended to a list, and then all the calls to connections are done in a single call.
+
+    ```python
+    from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+    from distilabel.pipeline import Pipeline
+    from distilabel.steps import GroupColumns, LoadDataFromHub
+    from distilabel.steps.tasks import TextGeneration
+
+    with Pipeline("pipe-name", description="My first pipe") as pipeline:
+        load_dataset = LoadDataFromHub(name="load_dataset")
+
+        combine_generations = GroupColumns(
+            name="combine_generations",
+            columns=["generation", "model_name"],
+            output_columns=["generations", "model_names"],
+        )
+
+        tasks = []
+        for llm in (
+            OpenAILLM(model="gpt-4-0125-preview"),
+            MistralLLM(model="mistral-large-2402"),
+            VertexAILLM(model="gemini-1.5-pro"),
+        ):
+            tasks.append(
+                TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+            )
+
+        load_dataset >> tasks >> combine_generations
+    ```
+
+### Routing batches to specific downstream steps
+
+In some pipelines, you may want to send batches from a single upstream step to specific downstream steps based on certain conditions. To achieve this, you can use a `routing_batch_function`. This function takes a list of downstream steps and returns a list of step names to which each batch should be routed.
+
+Let's update the example above to route the batches loaded by the `LoadDataFromHub` step to just 2 of the `TextGeneration` tasks. First, we will create our custom [`routing_batch_function`][distilabel.pipeline.routing_batch_function.routing_batch_function], and then we will update the pipeline to use it:
+
+```python
+import random
+from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+from distilabel.pipeline import Pipeline, routing_batch_function
+from distilabel.steps import GroupColumns, LoadDataFromHub
+from distilabel.steps.tasks import TextGeneration
+
+@routing_batch_function
+def sample_two_steps(steps: list[str]) -> list[str]:
+    return random.sample(steps, 2)
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(
+        name="load_dataset",
+        output_mappings={"prompt": "instruction"},
+    )
+
+    tasks = []
+    for llm in (
+        OpenAILLM(model="gpt-4-0125-preview"),
+        MistralLLM(model="mistral-large-2402"),
+        VertexAILLM(model="gemini-1.0-pro"),
+    ):
+        tasks.append(
+            TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+        )
+
+    combine_generations = GroupColumns(
+        name="combine_generations",
+        columns=["generation", "model_name"],
+        output_columns=["generations", "model_names"],
+    )
+
+    load_dataset >> sample_two_steps >> tasks >> combine_generations
+```
+
+ The `routing_batch_function` that we just built is a common one, so `distilabel` comes with a builtin function that can be used to achieve the same behavior:
+
+```python
+from distilable.pipeline import sample_n_steps
+
+sample_two_steps = sample_n_steps(2)
+```
+
+## Running the pipeline
+
+### Pipeline.dry_run
+
+Before running the `Pipeline` we can check if the pipeline is valid using the `Pipeline.dry_run()` method. It takes the same parameters as the `run` method which we will discuss in the following section, plus the `batch_size` we want the dry run to use (by default set to 1).
+
+```python
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    ...
+
+if __name__ == "__main__":
+    distiset = pipeline.dry_run(parameters=..., batch_size=1)
+```
+
+### Pipeline.run
+
+After testing, we can now execute the full `Pipeline` using the `Pipeline.run()` method.
+
+```python
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    ...
+
+if __name__ == "__main__":
+    distiset = pipeline.run(
+        parameters={
+            "load_dataset": {
+                "repo_id": "distilabel-internal-testing/instruction-dataset-mini",
+                "split": "test",
+            },
+            "text_generation_with_gpt-4-0125-preview": {
+                "llm": {
+                    "generation_kwargs": {
+                        "temperature": 0.7,
+                        "max_new_tokens": 512,
+                    }
+                }
+            },
+            "text_generation_with_mistral-large-2402": {
+                "llm": {
+                    "generation_kwargs": {
+                        "temperature": 0.7,
+                        "max_new_tokens": 512,
+                    }
+                }
+            },
+            "text_generation_with_gemini-1.0-pro": {
+                "llm": {
+                    "generation_kwargs": {
+                        "temperature": 0.7,
+                        "max_new_tokens": 512,
+                    }
+                }
+            },
+        },
+    )
+```
+
+But if we run the pipeline above, we will see that the `run` method will fail:
+
+```
+ValueError: Step 'text_generation_with_gpt-4-0125-preview' requires inputs ['instruction'], but only the inputs=['prompt', 'completion', 'meta'] are available, which means that the inputs=['instruction'] are missing or not available
+when the step gets to be executed in the pipeline. Please make sure previous steps to 'text_generation_with_gpt-4-0125-preview' are generating the required inputs.
+```
+
+This is because, before actually running the pipeline, we must ensure each step has the necessary input columns to be executed. In this case, the `TextGeneration` task requires the `instruction` column, but the `LoadDataFromHub` step generates the `prompt` column. To solve this, we can use the `output_mappings` or `input_mapping` arguments of individual `Step`s, to map columns from one step to another.
+
+```python
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(
+        name="load_dataset",
+        output_mappings={"prompt": "instruction"}
+    )
+
+    ...
+```
+
+If we execute the pipeline again, it will run successfully and we will have a `Distiset` with the outputs of all the leaf steps of the pipeline which we can push to the Hugging Face Hub.
+
+```python
+if __name__ == "__main__":
+    distiset = pipeline.run(...)
+    distiset.push_to_hub("distilabel-internal-testing/instruction-dataset-mini-with-generations")
+```
+
+#### Pipeline.run with a dataset
+
+Note that in most cases if you don't need the extra flexibility the [`GeneratorSteps`][distilabel.steps.base.GeneratorStep] bring you, you can create a dataset as you would normally do and pass it to the [Pipeline.run][distilabel.pipeline.base.BasePipeline.run] method directly. Look at the highlighted lines to see the updated lines:
+
+```python hl_lines="11-14 33 38"
+import random
+from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+from distilabel.pipeline import Pipeline, routing_batch_function
+from distilabel.steps import GroupColumns
+from distilabel.steps.tasks import TextGeneration
+
+@routing_batch_function
+def sample_two_steps(steps: list[str]) -> list[str]:
+    return random.sample(steps, 2)
+
+dataset = load_dataset(
+    "distilabel-internal-testing/instruction-dataset-mini",
+    split="test"
+)
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    tasks = []
+    for llm in (
+        OpenAILLM(model="gpt-4-0125-preview"),
+        MistralLLM(model="mistral-large-2402"),
+        VertexAILLM(model="gemini-1.0-pro"),
+    ):
+        tasks.append(
+            TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+        )
+
+    combine_generations = GroupColumns(
+        name="combine_generations",
+        columns=["generation", "model_name"],
+        output_columns=["generations", "model_names"],
+    )
+
+    sample_two_steps >> tasks >> combine_generations
+
+
+if __name__ == "__main__":
+    distiset = pipeline.run(
+        dataset=dataset,
+        parameters=...
+    )
+```
+
+
+### Stopping the pipeline
+
+In case you want to stop the pipeline while it's running, you can press ++ctrl+c++ or ++cmd+c++ depending on your OS (or send a `SIGINT` to the main process), and the outputs will be stored in the cache. Pressing an additional time will force the pipeline to stop its execution, but this can lead to losing the generated outputs for certain batches.
+
+## Cache
+
+If for some reason, the pipeline execution stops (for example by pressing `Ctrl+C`), the state of the pipeline and the outputs will be stored in the cache, so we can resume the pipeline execution from the point where it was stopped.
+
+If we want to force the pipeline to run again without can, then we can use the `use_cache` argument of the `Pipeline.run()` method:
+
+```python
+if __name__ == "__main__":
+    distiset = pipeline.run(parameters={...}, use_cache=False)
+```
+
+!!! NOTE
+    For more information on caching, we refer the reader to the [caching](../../advanced/caching.md) section.
+
+## Adjusting the batch size for each step
+
+Memory issues can arise when processing large datasets or when using large models. To avoid this, we can use the `input_batch_size` argument of individual tasks. `TextGeneration` task will receive 5 dictionaries, while the `LoadDataFromHub` step will send 10 dictionaries per batch:
+
+```python
+from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps import GroupColumns, LoadDataFromHub
+from distilabel.steps.tasks import TextGeneration
+
+with Pipeline("pipe-name", description="My first pipe") as pipeline:
+    load_dataset = LoadDataFromHub(
+        name="load_dataset",
+        output_mappings={"prompt": "instruction"},
+        batch_size=10
+    )
+
+    for llm in (
+        OpenAILLM(model="gpt-4-0125-preview"),
+        MistralLLM(model="mistral-large-2402"),
+        VertexAILLM(model="gemini-1.5-pro"),
+    ):
+        task = TextGeneration(
+            name=f"text_generation_with_{llm.model_name}",
+            llm=llm,
+            input_batch_size=5,
+        )
+
+    ...
+```
+
+## Serializing the pipeline
+
+Sharing a pipeline with others is very easy, as we can serialize the pipeline object using the `save` method. We can save the pipeline in different formats, such as `yaml` or `json`:
+
+=== "yaml"
+    ```python
+    if __name__ == "__main__":
+        pipeline.save("pipeline.yaml", format="yaml")
+    ```
+
+=== "json"
+    ```python
+    if __name__ == "__main__":
+        pipeline.save("pipeline.json", format="json")
+    ```
+
+To load the pipeline, we can use the `from_yaml` or `from_json` methods:
+
+=== "yaml"
+    ```python
+    pipeline = Pipeline.from_yaml("pipeline.yaml")
+    ```
+
+=== "json"
+    ```python
+    pipeline = Pipeline.from_json("pipeline.json")
+    ```
+
+Serializing the pipeline is very useful when we want to share the pipeline with others, or when we want to store the pipeline for future use. It can even be hosted online, so the pipeline can be executed directly using the [CLI](../../advanced/cli/index.md).
+
+## Fully working example
+
+To sum up, here is the full code of the pipeline we have created in this section. Note that you will need to change the name of the Hugging Face repository where the resulting will be pushed, set `OPENAI_API_KEY` environment variable, set `MISTRAL_API_KEY` and have `gcloud` installed and configured:
+
+??? Code
+    ```python
+    from distilabel.llms import MistralLLM, OpenAILLM, VertexAILLM
+    from distilabel.pipeline import Pipeline
+    from distilabel.steps import GroupColumns, LoadDataFromHub
+    from distilabel.steps.tasks import TextGeneration
+
+    with Pipeline("pipe-name", description="My first pipe") as pipeline:
+        load_dataset = LoadDataFromHub(
+            name="load_dataset",
+            output_mappings={"prompt": "instruction"},
+        )
+
+        combine_generations = GroupColumns(
+            name="combine_generations",
+            columns=["generation", "model_name"],
+            output_columns=["generations", "model_names"],
+        )
+
+        for llm in (
+            OpenAILLM(model="gpt-4-0125-preview"),
+            MistralLLM(model="mistral-large-2402"),
+            VertexAILLM(model="gemini-1.0-pro"),
+        ):
+            task = TextGeneration(name=f"text_generation_with_{llm.model_name}", llm=llm)
+            load_dataset.connect(task)
+            task.connect(combine_generations)
+
+    if __name__ == "__main__":
+        distiset = pipeline.run(
+            parameters={
+                "load_dataset": {
+                    "repo_id": "distilabel-internal-testing/instruction-dataset-mini",
+                    "split": "test",
+                },
+                "text_generation_with_gpt-4-0125-preview": {
+                    "llm": {
+                        "generation_kwargs": {
+                            "temperature": 0.7,
+                            "max_new_tokens": 512,
+                        }
+                    }
+                },
+                "text_generation_with_mistral-large-2402": {
+                    "llm": {
+                        "generation_kwargs": {
+                            "temperature": 0.7,
+                            "max_new_tokens": 512,
+                        }
+                    }
+                },
+                "text_generation_with_gemini-1.0-pro": {
+                    "llm": {
+                        "generation_kwargs": {
+                            "temperature": 0.7,
+                            "max_new_tokens": 512,
+                        }
+                    }
+                },
+            },
+        )
+        distiset.push_to_hub(
+            "distilabel-internal-testing/instruction-dataset-mini-with-generations"
+        )
+    ```
+
+
+
+base.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import hashlib
+import logging
+import os
+import signal
+import threading
+import time
+import uuid
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
+)
+
+import fsspec
+from typing_extensions import Self
+from upath import UPath
+
+from distilabel import __version__
+from distilabel.constants import (
+    CONVERGENCE_STEP_ATTR_NAME,
+    INPUT_QUEUE_ATTR_NAME,
+    LAST_BATCH_SENT_FLAG,
+    RECEIVES_ROUTED_BATCHES_ATTR_NAME,
+    ROUTING_BATCH_FUNCTION_ATTR_NAME,
+    STEP_ATTR_NAME,
+)
+from distilabel.distiset import create_distiset
+from distilabel.mixins.requirements import RequirementsMixin
+from distilabel.pipeline._dag import DAG
+from distilabel.pipeline.batch import _Batch
+from distilabel.pipeline.batch_manager import _BatchManager
+from distilabel.pipeline.write_buffer import _WriteBuffer
+from distilabel.steps.base import GeneratorStep
+from distilabel.steps.generators.utils import make_generator_step
+from distilabel.utils.logging import setup_logging, stop_logging
+from distilabel.utils.serialization import (
+    TYPE_INFO_KEY,
+    _Serializable,
+    read_json,
+)
+
+if TYPE_CHECKING:
+    from os import PathLike
+    from queue import Queue
+
+    from distilabel.distiset import Distiset
+    from distilabel.pipeline.routing_batch_function import RoutingBatchFunction
+    from distilabel.pipeline.typing import (
+        InputDataset,
+        PipelineRuntimeParametersInfo,
+        StepLoadStatus,
+    )
+    from distilabel.steps.base import Step, _Step
+
+    class _CacheLocation(TypedDict):
+        """Dictionary to store the filenames and directories of a cached pipeline.
+
+        Attributes:
+            pipeline: The filename where the pipeline content will be serialized.
+            batch_manager: The filename where the batch manager content will be serialized.
+            data: The directory where the output data of each leaf step will be stored.
+            log_file: The filename where the logs will be stored.
+        """
+
+        pipeline: Path
+        batch_manager: Path
+        data: Path
+        batch_input_data: Path
+        log_file: Path
+        stages_file: Path
+
+
+BASE_CACHE_DIR = Path.home() / ".cache" / "distilabel" / "pipelines"
+
+
+class _GlobalPipelineManager:
+    """Class to manage the global pipeline instance that will be used by the steps when
+    created within a pipeline context.
+
+    Attributes:
+        _context_global_pipeline: The global pipeline instance.
+    """
+
+    _context_global_pipeline: Union["BasePipeline", None] = None
+
+    @classmethod
+    def set_pipeline(cls, pipeline: Union["BasePipeline", None] = None) -> None:
+        """Set the global pipeline instance.
+
+        Args:
+            pipeline: The global pipeline instance.
+        """
+        cls._context_global_pipeline = pipeline
+
+    @classmethod
+    def get_pipeline(cls) -> Union["BasePipeline", None]:
+        """Get the global pipeline instance.
+
+        Returns:
+            The global pipeline instance.
+        """
+        return cls._context_global_pipeline
+
+
+_STEP_LOAD_FAILED_CODE = -666
+_STEP_NOT_LOADED_CODE = -999
+
+
+class BasePipeline(ABC, RequirementsMixin, _Serializable):
+    """Base class for a `distilabel` pipeline.
+
+    Attributes:
+        name: The name of the pipeline.
+        description: A description of the pipeline.
+        dag: The `DAG` instance that represents the pipeline.
+        _cache_dir: The directory where the pipeline will be cached.
+        _logger: The logger instance that will be used by the pipeline.
+        _batch_manager: The batch manager that will manage the batches received from the
+            steps while running the pipeline. It will be created when the pipeline is run,
+            from scratch or from cache. Defaults to `None`.
+        _write_buffer: The buffer that will store the data of the leaf steps of the pipeline
+            while running, so the `Distiset` can be created at the end. It will be created
+            when the pipeline is run. Defaults to `None`.
+        _fs: The `fsspec` filesystem to be used to store the data of the `_Batch`es passed
+            between the steps. It will be set when the pipeline is run. Defaults to `None`.
+        _storage_base_path: The base path where the data of the `_Batch`es passed between
+            the steps will be stored. It will be set then the pipeline is run. Defaults
+            to `None`.
+        _use_fs_to_pass_data: Whether to use the file system to pass the data of the
+            `_Batch`es between the steps. Even if this parameter is `False`, the `Batch`es
+            received by `GlobalStep`s will always use the file system to pass the data.
+            Defaults to `False`.
+        _dry_run: A flag to indicate if the pipeline is running in dry run mode. Defaults
+            to `False`.
+        output_queue: A queue to store the output of the steps while running the pipeline.
+        load_queue: A queue used by each `Step` to notify the main process it has finished
+            loading or it the step has been unloaded.
+    """
+
+    _output_queue: "Queue[Any]"
+    _load_queue: "Queue[Union[StepLoadStatus, None]]"
+
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        cache_dir: Optional[Union[str, "PathLike"]] = None,
+        enable_metadata: bool = False,
+        requirements: Optional[List[str]] = None,
+    ) -> None:
+        """Initialize the `BasePipeline` instance.
+
+        Args:
+            name: The name of the pipeline. If not generated, a random one will be generated by default.
+            description: A description of the pipeline. Defaults to `None`.
+            cache_dir: A directory where the pipeline will be cached. Defaults to `None`.
+            enable_metadata: Whether to include the distilabel metadata column for the pipeline
+                in the final `Distiset`. It contains metadata used by distilabel, for example
+                the raw outputs of the `LLM` without processing would be here, inside `raw_output_...`
+                field. Defaults to `False`.
+            requirements: List of requirements that must be installed to run the pipeline.
+                Defaults to `None`, but can be helpful to inform in a pipeline to be shared
+                that this requirements must be installed.
+        """
+        self.name = name or f"pipeline_{str(uuid.uuid4())[:8]}"
+        self.description = description
+        self._enable_metadata = enable_metadata
+        self.dag = DAG()
+
+        if cache_dir:
+            self._cache_dir = Path(cache_dir)
+        elif env_cache_dir := os.getenv("DISTILABEL_CACHE_DIR"):
+            self._cache_dir = Path(env_cache_dir)
+        else:
+            self._cache_dir = BASE_CACHE_DIR
+
+        self._logger = logging.getLogger("distilabel.pipeline")
+
+        self._batch_manager: Optional["_BatchManager"] = None
+        self._write_buffer: Optional["_WriteBuffer"] = None
+
+        self._steps_load_status: Dict[str, int] = {}
+        self._steps_load_status_lock = threading.Lock()
+
+        self._stop_called = False
+        self._stop_called_lock = threading.Lock()
+        self._stop_calls = 0
+
+        self._fs: Optional[fsspec.AbstractFileSystem] = None
+        self._storage_base_path: Optional[str] = None
+        self._use_fs_to_pass_data: bool = False
+        self._dry_run = False
+
+        self._current_stage = 0
+        self._stages_last_batch: List[List[str]] = []
+
+        self.requirements = requirements or []
+
+        self._exception: Union[Exception, None] = None
+
+        self._log_queue: Union["Queue[Any]", None] = None
+
+    def __enter__(self) -> Self:
+        """Set the global pipeline instance when entering a pipeline context."""
+        _GlobalPipelineManager.set_pipeline(self)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Unset the global pipeline instance when exiting a pipeline context."""
+        _GlobalPipelineManager.set_pipeline(None)
+
+    def _create_signature(self) -> str:
+        """Makes a signature (hash) of a pipeline, using the step ids and the adjacency between them.
+
+        The main use is to find the pipeline in the cache folder.
+
+        Returns:
+            int: Signature of the pipeline.
+        """
+        hasher = hashlib.sha1()
+
+        steps_info = []
+        pipeline_dump = self.dump()["pipeline"]
+
+        for step in pipeline_dump["steps"]:
+            step_info = step["name"]
+            for argument, value in sorted(step[STEP_ATTR_NAME].items()):
+                if (argument == TYPE_INFO_KEY) or (value is None):
+                    continue
+
+                if isinstance(value, dict):
+                    # input_mappings/output_mappings
+                    step_info += "-".join(
+                        [
+                            f"{str(k)}={str(v)}"
+                            for k, v in value.items()
+                            if k not in ("disable_cuda_device_placement",)
+                        ]
+                    )
+                elif isinstance(value, (list, tuple)):
+                    # runtime_parameters_info
+                    step_info += "-".join([str(v) for v in value])
+                elif isinstance(value, (int, str, float, bool)):
+                    if argument != "disable_cuda_device_placement":
+                        # batch_size/name
+                        step_info += str(value)
+                else:
+                    raise ValueError(
+                        f"Field '{argument}' in step '{step['name']}' has type {type(value)}, explicitly cast the type to 'str'."
+                    )
+
+            steps_info.append(step_info)
+
+        connections_info = [
+            f"{c['from']}-{'-'.join(c['to'])}" for c in pipeline_dump["connections"]
+        ]
+
+        routing_batch_functions_info = []
+        for function in pipeline_dump["routing_batch_functions"]:
+            step = function["step"]
+            routing_batch_function: "RoutingBatchFunction" = self.dag.get_step(step)[
+                ROUTING_BATCH_FUNCTION_ATTR_NAME
+            ]
+            if type_info := routing_batch_function._get_type_info():
+                step += f"-{type_info}"
+
+        hasher.update(
+            ",".join(
+                steps_info + connections_info + routing_batch_functions_info
+            ).encode()
+        )
+
+        return hasher.hexdigest()
+
+    def run(
+        self,
+        parameters: Optional[Dict[str, Dict[str, Any]]] = None,
+        use_cache: bool = True,
+        storage_parameters: Optional[Dict[str, Any]] = None,
+        use_fs_to_pass_data: bool = False,
+        dataset: Optional["InputDataset"] = None,
+    ) -> "Distiset":  # type: ignore
+        """Run the pipeline. It will set the runtime parameters for the steps and validate
+        the pipeline.
+
+        This method should be extended by the specific pipeline implementation,
+        adding the logic to run the pipeline.
+
+        Args:
+            parameters: A dictionary with the step name as the key and a dictionary with
+                the runtime parameters for the step as the value. Defaults to `None`.
+            use_cache: Whether to use the cache from previous pipeline runs. Defaults to
+                `True`.
+            storage_parameters: A dictionary with the storage parameters (`fsspec` and path)
+                that will be used to store the data of the `_Batch`es passed between the
+                steps if `use_fs_to_pass_data` is `True` (for the batches received by a
+                `GlobalStep` it will be always used). It must have at least the "path" key,
+                and it can contain additional keys depending on the protocol. By default,
+                it will use the local file system and a directory in the cache directory.
+                Defaults to `None`.
+            use_fs_to_pass_data: Whether to use the file system to pass the data of
+                the `_Batch`es between the steps. Even if this parameter is `False`, the
+                `Batch`es received by `GlobalStep`s will always use the file system to
+                pass the data. Defaults to `False`.
+            dataset: If given, it will be used to create a `GeneratorStep` and put it as the
+                root step. Convenient method when you have already processed the dataset in
+                your script and just want to pass it already processed. Defaults to `None`.
+
+        Returns:
+            The `Distiset` created by the pipeline.
+        """
+
+        self._exception: Union[Exception, None] = None
+
+        # Set the runtime parameters that will be used during the pipeline execution.
+        # They are used to generate the signature of the pipeline that is used to hit the
+        # cache when the pipeline is run, so it's important to do it first.
+        self._set_runtime_parameters(parameters or {})
+
+        setup_logging(
+            log_queue=self._log_queue, filename=str(self._cache_location["log_file"])
+        )
+
+        if dataset is not None:
+            self._add_dataset_generator_step(dataset)
+
+        # Validate the pipeline DAG to check that all the steps are chainable, there are
+        # no missing runtime parameters, batch sizes are correct, etc.
+        self.dag.validate()
+
+        # Set the initial load status for all the steps
+        self._init_steps_load_status()
+
+        # Load the stages status or initialize it
+        self._load_stages_status(use_cache)
+
+        # Load the `_BatchManager` from cache or create one from scratch
+        self._load_batch_manager(use_cache)
+
+        if to_install := self.requirements_to_install():
+            # Print the list of requirements like they would appear in a requirements.txt
+            to_install_list = "\n" + "\n".join(to_install)
+            msg = f"Please install the following requirements to run the pipeline: {to_install_list}"
+            self._logger.error(msg)
+            raise ModuleNotFoundError(msg)
+
+        # Setup the filesystem that will be used to pass the data of the `_Batch`es
+        self._setup_fsspec(storage_parameters)
+        self._use_fs_to_pass_data = use_fs_to_pass_data
+
+        if self._dry_run:
+            self._logger.info("🌵 Dry run mode")
+
+        # If the batch manager is not able to generate batches, that means that the loaded
+        # `_BatchManager` from cache didn't have any remaining batches to process i.e.
+        # the previous pipeline execution was completed successfully.
+        if not self._batch_manager.can_generate():  # type: ignore
+            self._logger.info(
+                "💾 Loaded batch manager from cache doesn't contain any remaining data."
+                " Returning `Distiset` from cache data..."
+            )
+            distiset = create_distiset(
+                self._cache_location["data"],
+                pipeline_path=self._cache_location["pipeline"],
+                log_filename_path=self._cache_location["log_file"],
+                enable_metadata=self._enable_metadata,
+                dag=self.dag,
+            )
+            stop_logging()
+            return distiset
+
+        self._setup_write_buffer()
+
+        self._print_load_stages_info()
+
+    def dry_run(
+        self,
+        parameters: Optional[Dict[str, Dict[str, Any]]] = None,
+        batch_size: int = 1,
+    ) -> "Distiset":
+        """Do a dry run to test the pipeline runs as expected.
+
+        Running a `Pipeline` in dry run mode will set all the `batch_size` of generator steps
+        to the specified `batch_size`, and run just with a single batch, effectively
+        running the whole pipeline with a single example. The cache will be set to `False`.
+
+        Args:
+            parameters: A dictionary with the step name as the key and a dictionary with
+                the runtime parameters for the step as the value. Defaults to `None`.
+            batch_size: The batch size of the unique batch generated by the generators
+                steps of the pipeline. Defaults to `1`.
+
+        Returns:
+            Will return the `Distiset` as the main run method would do.
+        """
+        self._dry_run = True
+
+        for step_name in self.dag:
+            step = self.dag.get_step(step_name)[STEP_ATTR_NAME]
+
+            if step.is_generator:
+                if not parameters:
+                    parameters = {}
+                parameters[step_name] = {"batch_size": batch_size}
+
+        distiset = self.run(parameters=parameters, use_cache=False)
+
+        self._dry_run = False
+        return distiset
+
+    def _add_dataset_generator_step(self, dataset: "InputDataset") -> None:
+        """Create a root step to work as the `GeneratorStep` for the pipeline using a
+        dataset.
+
+        Args:
+            dataset: A dataset that will be used to create a `GeneratorStep` and
+                placed in the DAG as the root step.
+
+        Raises:
+            ValueError: If there's already a `GeneratorStep` in the pipeline.
+        """
+        for step_name in self.dag:
+            step = self.dag.get_step(step_name)[STEP_ATTR_NAME]
+            if isinstance(step_name, GeneratorStep):
+                raise ValueError(
+                    "There is already a `GeneratorStep` in the pipeline, you can either pass a `dataset` to the "
+                    f"run method, or create a `GeneratorStep` explictly. `GeneratorStep`: {step}"
+                )
+        loader = make_generator_step(dataset)
+        self.dag.add_root_step(loader)
+
+    def get_runtime_parameters_info(self) -> "PipelineRuntimeParametersInfo":
+        """Get the runtime parameters for the steps in the pipeline.
+
+        Returns:
+            A dictionary with the step name as the key and a list of dictionaries with
+            the parameter name and the parameter info as the value.
+        """
+        runtime_parameters = {}
+        for step_name in self.dag:
+            step: "_Step" = self.dag.get_step(step_name)[STEP_ATTR_NAME]
+            runtime_parameters[step_name] = step.get_runtime_parameters_info()
+        return runtime_parameters
+
+    def _init_steps_load_status(self) -> None:
+        """Initialize the `_steps_load_status` dictionary assigning 0 to every step of
+        the pipeline."""
+        for step_name in self.dag:
+            self._steps_load_status[step_name] = _STEP_NOT_LOADED_CODE
+
+    def _setup_fsspec(
+        self, storage_parameters: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Setups the `fsspec` filesystem to be used to store the data of the `_Batch`es
+        passed between the steps.
+
+        Args:
+            storage_parameters: A dictionary with the storage parameters (`fsspec` and path)
+                that will be used to store the data of the `_Batch`es passed between the
+                steps if `use_fs_to_pass_data` is `True` (for the batches received by a
+                `GlobalStep` it will be always used). It must have at least the "path" key,
+                and it can contain additional keys depending on the protocol. By default,
+                it will use the local file system and a directory in the cache directory.
+                Defaults to `None`.
+        """
+        if not storage_parameters:
+            self._fs = fsspec.filesystem("file")
+            self._storage_base_path = (
+                f"file://{self._cache_location['batch_input_data']}"
+            )
+            return
+
+        if "path" not in storage_parameters:
+            raise ValueError(
+                "The 'path' key must be present in the `storage_parameters` dictionary"
+                " if it's not `None`."
+            )
+
+        path = storage_parameters.pop("path")
+        protocol = UPath(path).protocol
+
+        self._fs = fsspec.filesystem(protocol, **storage_parameters)
+        self._storage_base_path = path
+
+    def _add_step(self, step: "_Step") -> None:
+        """Add a step to the pipeline.
+
+        Args:
+            step: The step to be added to the pipeline.
+        """
+        self.dag.add_step(step)
+
+    def _add_edge(self, from_step: str, to_step: str) -> None:
+        """Add an edge between two steps in the pipeline.
+
+        Args:
+            from_step: The name of the step that will generate the input for `to_step`.
+            to_step: The name of the step that will receive the input from `from_step`.
+        """
+        self.dag.add_edge(from_step, to_step)
+
+        # Check if `from_step` has a `routing_batch_function`. If it does, then mark
+        # `to_step` as a step that will receive a routed batch.
+        node = self.dag.get_step(from_step)  # type: ignore
+        routing_batch_function = node.get(ROUTING_BATCH_FUNCTION_ATTR_NAME, None)
+        self.dag.set_step_attr(
+            name=to_step,
+            attr=RECEIVES_ROUTED_BATCHES_ATTR_NAME,
+            value=routing_batch_function is not None,
+        )
+
+    def _is_convergence_step(self, step_name: str) -> None:
+        """Checks if a step is a convergence step.
+
+        Args:
+            step_name: The name of the step.
+        """
+        return self.dag.get_step(step_name).get(CONVERGENCE_STEP_ATTR_NAME)
+
+    def _add_routing_batch_function(
+        self, step_name: str, routing_batch_function: "RoutingBatchFunction"
+    ) -> None:
+        """Add a routing batch function to a step.
+
+        Args:
+            step_name: The name of the step that will receive the routed batch.
+            routing_batch_function: The function that will route the batch to the step.
+        """
+        self.dag.set_step_attr(
+            name=step_name,
+            attr=ROUTING_BATCH_FUNCTION_ATTR_NAME,
+            value=routing_batch_function,
+        )
+
+    def _set_runtime_parameters(self, parameters: Dict[str, Dict[str, Any]]) -> None:
+        """Set the runtime parameters for the steps in the pipeline.
+
+        Args:
+            parameters: A dictionary with the step name as the key and a dictionary with
+            the parameter name as the key and the parameter value as the value.
+        """
+        step_names = set(self.dag.G)
+        for step_name, step_parameters in parameters.items():
+            if step_name not in step_names:
+                self._logger.warning(
+                    f"❓ Step '{step_name}' provided in `Pipeline.run(parameters={{...}})` not found in the pipeline."
+                    f" Available steps are: {step_names}."
+                )
+            else:
+                step: "_Step" = self.dag.get_step(step_name)[STEP_ATTR_NAME]
+                step.set_runtime_parameters(step_parameters)
+
+    def _model_dump(self, obj: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Dumps the DAG content to a dict.
+
+        Args:
+            obj (Any): Unused, just kept to match the signature of the parent method.
+            kwargs (Any): Unused, just kept to match the signature of the parent method.
+
+        Returns:
+            Dict[str, Any]: Internal representation of the DAG from networkx in a serializable format.
+        """
+        return self.dag.dump()
+
+    def dump(self, **kwargs: Any) -> Dict[str, Any]:
+        return {
+            "distilabel": {"version": __version__},
+            "pipeline": {
+                "name": self.name,
+                "description": self.description,
+                **super().dump(),
+            },
+            "requirements": self.requirements,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> Self:
+        """Create a Pipeline from a dict containing the serialized data.
+
+        Note:
+            It's intended for internal use.
+
+        Args:
+            data (Dict[str, Any]): Dictionary containing the serialized data from a Pipeline.
+
+        Returns:
+            BasePipeline: Pipeline recreated from the dictionary info.
+        """
+        name = data["pipeline"]["name"]
+        description = data["pipeline"].get("description")
+        requirements = data.get("requirements", [])
+        with cls(name=name, description=description, requirements=requirements) as pipe:
+            pipe.dag = DAG.from_dict(data["pipeline"])
+        return pipe
+
+    @property
+    def _cache_location(self) -> "_CacheLocation":
+        """Dictionary containing the object that will stored and the location,
+        whether it is a filename or a folder.
+
+        Returns:
+            Path: Filenames where the pipeline content will be serialized.
+        """
+        folder = self._cache_dir / self.name / self._create_signature()
+        return {
+            "pipeline": folder / "pipeline.yaml",
+            "batch_manager": folder / "batch_manager.json",
+            "data": folder / "data",
+            "batch_input_data": folder / "batch_input_data",
+            "log_file": folder / "pipeline.log",
+            "stages_file": folder / "stages.json",
+        }
+
+    def _cache(self) -> None:
+        """Saves the `BasePipeline` using the `_cache_filename`."""
+        if self._dry_run:
+            return
+
+        self.save(
+            path=self._cache_location["pipeline"],
+            format=self._cache_location["pipeline"].suffix.replace(".", ""),  # type: ignore
+        )
+
+        if self._batch_manager is not None:
+            self._batch_manager.cache(self._cache_location["batch_manager"])
+
+        self._save_stages_status()
+
+        self._logger.debug("Pipeline and batch manager saved to cache.")
+
+    def _save_stages_status(self) -> None:
+        """Saves the stages status to cache."""
+        self.save(
+            path=self._cache_location["stages_file"],
+            format="json",
+            dump={
+                "current_stage": self._current_stage,
+                "stages_last_batch": self._stages_last_batch,
+            },
+        )
+
+    def _load_stages_status(self, use_cache: bool = True) -> None:
+        """Try to load the stages status from cache, or initialize it if cache file doesn't
+        exist or cache is not going to be used."""
+        if use_cache and self._cache_location["stages_file"].exists():
+            stages_status = read_json(self._cache_location["stages_file"])
+            self._current_stage = stages_status["current_stage"]
+            self._stages_last_batch = stages_status["stages_last_batch"]
+        else:
+            self._current_stage = 0
+            self._stages_last_batch = [
+                [] for _ in range(len(self.dag.get_steps_load_stages()[0]))
+            ]
+
+    def _load_batch_manager(self, use_cache: bool = True) -> None:
+        """Will try to load the `_BatchManager` from the cache dir if found. Otherwise,
+        it will create one from scratch.
+        """
+        batch_manager_cache_loc = self._cache_location["batch_manager"]
+        if use_cache and batch_manager_cache_loc.exists():
+            self._logger.info(
+                f"💾 Loading `_BatchManager` from cache: '{batch_manager_cache_loc}'"
+            )
+            self._batch_manager = _BatchManager.load_from_cache(batch_manager_cache_loc)
+        else:
+            self._batch_manager = _BatchManager.from_dag(self.dag)
+
+    def _setup_write_buffer(self) -> None:
+        """Setups the `_WriteBuffer` that will store the data of the leaf steps of the
+        pipeline while running, so the `Distiset` can be created at the end.
+        """
+        buffer_data_path = self._cache_location["data"]
+        self._logger.info(f"📝 Pipeline data will be written to '{buffer_data_path}'")
+        self._write_buffer = _WriteBuffer(buffer_data_path, self.dag.leaf_steps)
+
+    def _print_load_stages_info(self) -> None:
+        """Prints the information about the load stages."""
+        stages, _ = self.dag.get_steps_load_stages()
+        msg = ""
+        for stage, steps in enumerate(stages):
+            msg += f"\n * Stage {stage}: {steps}"
+        self._logger.info(
+            f"⌛ The steps of the pipeline will be loaded in stages:{msg}"
+        )
+
+    def _run_output_queue_loop_in_thread(self) -> threading.Thread:
+        """Runs the output queue loop in a separate thread to receive the output batches
+        from the steps. This is done to avoid the signal handler to block the loop, which
+        would prevent the pipeline from stopping correctly."""
+        thread = threading.Thread(target=self._output_queue_loop)
+        thread.start()
+        return thread
+
+    def _output_queue_loop(self) -> None:
+        """Loop to receive the output batches from the steps and manage the flow of the
+        batches through the pipeline."""
+        if not self._initialize_pipeline_execution():
+            return
+
+        while self._should_continue_processing():  # type: ignore
+            self._logger.debug("Waiting for output batch from step...")
+            if (batch := self._output_queue.get()) is None:
+                self._logger.debug("Received `None` from output queue. Breaking loop.")
+                break
+
+            self._logger.debug(
+                f"Received batch with seq_no {batch.seq_no} from step '{batch.step_name}'"
+                f" from output queue: {batch}"
+            )
+
+            self._process_batch(batch)
+
+            # If `_stop_called` was set to `True` while waiting for the output queue, then
+            # we need to handle the stop of the pipeline and break the loop to avoid
+            # propagating the batches through the pipeline and making the stop process
+            # slower.
+            if self._stop_called:
+                self._handle_batch_on_stop(batch)
+                break
+
+            # If there is another load stage and all the `last_batch`es from the stage
+            # have been received, then load the next stage.
+            if self._should_load_next_stage():
+                if not self._update_stage():
+                    break
+
+            self._manage_batch_flow(batch)
+
+        self._finalize_pipeline_execution()
+
+    def _initialize_pipeline_execution(self) -> bool:
+        """Load the steps of the required stage to initialize the pipeline execution,
+        and requests the initial batches to trigger the batch flowing in the pipeline.
+
+        Returns:
+            `True` if initialization went OK, `False` otherwise.
+        """
+        # Wait for all the steps to be loaded correctly
+        if not self._run_stage_steps_and_wait(stage=self._current_stage):
+            self._set_steps_not_loaded_exception()
+            return False
+
+        # Send the "first" batches to the steps so the batches starts flowing through
+        # the input queues and output queue
+        self._request_initial_batches()
+
+        return True
+
+    def _should_continue_processing(self) -> bool:
+        """Condition for the consume batches from the `output_queue` loop.
+
+        Returns:
+            `True` if should continue consuming batches, `False` otherwise and the pipeline
+            should stop.
+        """
+        return self._batch_manager.can_generate() and not self._stop_called  # type: ignore
+
+    def _process_batch(self, batch: "_Batch") -> None:
+        """Process a batch consumed from the `output_queue`.
+
+        Args:
+            batch: the batch to be processed.
+        """
+        if batch.data_path:
+            self._logger.debug(
+                f"Reading {batch.seq_no} batch data from '{batch.step_name}': '{batch.data_path}'"
+            )
+            batch.read_batch_data_from_fs()
+
+        if batch.step_name in self.dag.leaf_steps:
+            self._write_buffer.add_batch(batch)  # type: ignore
+
+        if batch.last_batch:
+            _, stages_last_steps = self.dag.get_steps_load_stages()
+            stage_last_steps = stages_last_steps[self._current_stage]
+            if batch.step_name in stage_last_steps:
+                self._stages_last_batch[self._current_stage].append(batch.step_name)
+                self._stages_last_batch[self._current_stage].sort()
+
+            # Make sure to send the `LAST_BATCH_SENT_FLAG` to the predecessors of the step
+            # if the batch is the last one, so they stop their processing loop even if they
+            # haven't received the last batch because of the routing function.
+            for step_name in self.dag.get_step_predecessors(batch.step_name):
+                if self._is_step_running(step_name):
+                    self._send_last_batch_flag_to_step(step_name)
+
+    def _update_stage(self) -> bool:
+        """Checks if the steps of next stage should be loaded and updates `_current_stage`
+        attribute.
+
+        Returns:
+            `True` if updating the stage went OK, `False` otherwise.
+        """
+        self._current_stage += 1
+        if not self._run_stage_steps_and_wait(stage=self._current_stage):
+            self._set_steps_not_loaded_exception()
+            return False
+
+        return True
+
+    def _should_load_next_stage(self) -> bool:
+        """Returns if the next stage should be loaded.
+
+        Returns:
+            `True` if the next stage should be loaded, `False` otherwise.
+        """
+        _, stage_last_steps = self.dag.get_steps_load_stages()
+        there_is_next_stage = self._current_stage + 1 < len(stage_last_steps)
+        stage_last_batches_received = (
+            self._stages_last_batch[self._current_stage]
+            == stage_last_steps[self._current_stage]
+        )
+        return there_is_next_stage and stage_last_batches_received
+
+    def _finalize_pipeline_execution(self) -> None:
+        """Finalizes the pipeline execution handling the prematurely stop of the pipeline
+        if required, caching the data and ensuring that all the steps finish its execution."""
+        if self._stop_called:
+            self._handle_stop()
+
+        self._cache()
+
+        # Send `None` to steps `input_queue`s just in case some step is still waiting
+        self._notify_steps_to_stop()
+
+        # Reset flag state
+        self._stop_called = False
+
+    def _run_load_queue_loop_in_thread(self) -> threading.Thread:
+        """Runs a background thread that reads from the `load_queue` to update the status
+        of the number of replicas loaded for each step.
+
+        Returns:
+            The thread that was started.
+        """
+        thread = threading.Thread(target=self._run_load_queue_loop)
+        thread.start()
+        return thread
+
+    def _run_load_queue_loop(self) -> None:
+        """Runs a loop that reads from the `load_queue` to update the status of the number
+        of replicas loaded for each step."""
+
+        while True:
+            if (load_info := self._load_queue.get()) is None:
+                self._logger.debug("Received `None` from load queue. Breaking loop.")
+                break
+
+            with self._steps_load_status_lock:
+                step_name, status = load_info["name"], load_info["status"]
+                if status == "loaded":
+                    if self._steps_load_status[step_name] == _STEP_NOT_LOADED_CODE:
+                        self._steps_load_status[step_name] = 1
+                    else:
+                        self._steps_load_status[step_name] += 1
+                elif status == "unloaded":
+                    self._steps_load_status[step_name] -= 1
+                else:
+                    # load failed
+                    self._steps_load_status[step_name] = _STEP_LOAD_FAILED_CODE
+
+                self._logger.debug(
+                    f"Step '{step_name}' loaded replicas: {self._steps_load_status[step_name]}"
+                )
+
+    def _is_step_running(self, step_name: str) -> bool:
+        """Checks if the step is running (at least one replica is running).
+
+        Args:
+            step_name: The step to be check if running.
+
+        Returns:
+            `True` if the step is running, `False` otherwise.
+        """
+        with self._steps_load_status_lock:
+            return self._steps_load_status[step_name] >= 1
+
+    def _run_stage_steps_and_wait(self, stage: int) -> bool:
+        """Runs the steps of the specified stage and waits for them to be ready.
+
+        Args:
+            stage: the stage from which the steps have to be loaded.
+
+        Returns:
+            `True` if all the steps have been loaded correctly, `False` otherwise.
+        """
+
+        steps_stages, _ = self.dag.get_steps_load_stages()
+        steps = steps_stages[stage]
+
+        # Run the steps of the stage
+        self._run_steps(steps=steps)
+
+        # Wait for them to be ready
+        self._logger.info(f"⏳ Waiting for all the steps of stage {stage} to load...")
+        previous_message = None
+        while not self._stop_called:
+            with self._steps_load_status_lock:
+                filtered_steps_load_status = {
+                    step_name: replicas
+                    for step_name, replicas in self._steps_load_status.items()
+                    if step_name in steps
+                }
+                self._logger.debug(
+                    f"Steps from stage {stage} loaded: {filtered_steps_load_status}"
+                )
+
+                if any(
+                    replicas_loaded == _STEP_LOAD_FAILED_CODE
+                    for replicas_loaded in filtered_steps_load_status.values()
+                ):
+                    self._logger.error(
+                        f"❌ Failed to load all the steps of stage {stage}"
+                    )
+                    return False
+
+                num_steps_loaded = 0
+                replicas_message = ""
+                for step_name, replicas in filtered_steps_load_status.items():
+                    step_replica_count = self.dag.get_step_replica_count(step_name)
+                    if replicas == step_replica_count:
+                        num_steps_loaded += 1
+                    replicas_message += f"\n * '{step_name}' replicas: {max(0, replicas)}/{step_replica_count}"
+
+                message = f"⏳ Steps from stage {stage} loaded: {num_steps_loaded}/{len(filtered_steps_load_status)}{replicas_message}"
+                if num_steps_loaded > 0 and message != previous_message:
+                    self._logger.info(message)
+                    previous_message = message
+
+                if num_steps_loaded == len(filtered_steps_load_status):
+                    self._logger.info(
+                        f"✅ All the steps from stage {stage} have been loaded!"
+                    )
+                    return True
+
+            time.sleep(2.5)
+
+        return not self._stop_called
+
+    def _handle_stop(self) -> None:
+        """Handles the stop of the pipeline execution, which will stop the steps from
+        processing more batches and wait for the output queue to be empty, to not lose
+        any data that was already processed by the steps before the stop was called."""
+        self._logger.debug("Handling stop of the pipeline execution...")
+
+        self._add_batches_back_to_batch_manager()
+
+        # Wait for the input queue to be empty, which means that all the steps finished
+        # processing the batches that were sent before the stop flag.
+        for step_name in self.dag:
+            self._wait_step_input_queue_empty(step_name)
+
+        self._consume_output_queue()
+
+    def _wait_step_input_queue_empty(self, step_name: str) -> Union["Queue[Any]", None]:
+        """Waits for the input queue of a step to be empty.
+
+        Args:
+            step_name: The name of the step.
+
+        Returns:
+            The input queue of the step if it's not loaded or finished, `None` otherwise.
+        """
+        if self._check_step_not_loaded_or_finished(step_name):
+            return None
+
+        if input_queue := self.dag.get_step(step_name).get(INPUT_QUEUE_ATTR_NAME):
+            while input_queue.qsize() != 0:
+                pass
+            return input_queue
+
+    def _check_step_not_loaded_or_finished(self, step_name: str) -> bool:
+        """Checks if a step is not loaded or already finished.
+
+        Args:
+            step_name: The name of the step.
+
+        Returns:
+            `True` if the step is not loaded or already finished, `False` otherwise.
+        """
+        with self._steps_load_status_lock:
+            num_replicas = self._steps_load_status[step_name]
+
+            # The step has finished (replicas = 0) or it has failed to load
+            if num_replicas in [0, _STEP_LOAD_FAILED_CODE]:
+                return True
+
+        return False
+
+    @property
+    @abstractmethod
+    def QueueClass(self) -> Callable:
+        """The class of the queue to use in the pipeline."""
+        pass
+
+    def _create_step_input_queue(self, step_name: str) -> "Queue[Any]":
+        """Creates an input queue for a step.
+
+        Args:
+            step_name: The name of the step.
+
+        Returns:
+            The input queue created.
+        """
+        input_queue = self.QueueClass()
+        self.dag.set_step_attr(step_name, INPUT_QUEUE_ATTR_NAME, input_queue)
+        return input_queue
+
+    @abstractmethod
+    def _run_step(self, step: "_Step", input_queue: "Queue[Any]", replica: int) -> None:
+        """Runs the `Step` instance.
+
+        Args:
+            step: The `Step` instance to run.
+            input_queue: The input queue where the step will receive the batches.
+            replica: The replica ID assigned.
+        """
+        pass
+
+    def _run_steps(self, steps: Iterable[str]) -> None:
+        """Runs the `Step`s of the pipeline, creating first an input queue for each step
+        that will be used to send the batches.
+
+        Args:
+            steps:
+        """
+        for step_name in steps:
+            step: "Step" = self.dag.get_step(step_name)[STEP_ATTR_NAME]
+            input_queue = self._create_step_input_queue(step_name=step_name)
+
+            # Set `pipeline` to `None` as in some Python environments the pipeline is not
+            # picklable and it will raise an error when trying to send the step to the process.
+            # `TypeError: cannot pickle 'code' object`
+            step.pipeline = None
+
+            if not step.is_normal and step.resources.replicas > 1:  # type: ignore
+                self._logger.warning(
+                    f"Step '{step_name}' is a `GeneratorStep` or `GlobalStep` and has more"
+                    " than 1 replica. Only `Step` instances can have more than 1 replica."
+                    " The number of replicas for the step will be set to 1."
+                )
+
+            step_num_replicas: int = step.resources.replicas if step.is_normal else 1  # type: ignore
+            for replica in range(step_num_replicas):
+                self._logger.debug(f"Running 1 replica of step '{step.name}'...")
+                self._run_step(step=step, input_queue=input_queue, replica=replica)
+
+    def _add_batches_back_to_batch_manager(self) -> None:
+        """Add the `Batch`es that were sent to a `Step` back to the `_BatchManager`. This
+        method should be used when the pipeline has been stopped prematurely."""
+        for step_name in self.dag:
+            node = self.dag.get_step(step_name)
+            step: "_Step" = node[STEP_ATTR_NAME]
+            if step.is_generator:
+                continue
+            if input_queue := node.get(INPUT_QUEUE_ATTR_NAME):
+                while not input_queue.empty():
+                    batch = input_queue.get()
+                    if not isinstance(batch, _Batch):
+                        continue
+                    self._batch_manager.add_batch(  # type: ignore
+                        to_step=step_name, batch=batch, prepend=True
+                    )
+                    self._logger.debug(
+                        f"Adding batch back to the batch manager: {batch}"
+                    )
+                input_queue.put(None)
+
+    def _consume_output_queue(self) -> None:
+        """Consumes the `Batch`es from the output queue until it's empty. This method should
+        be used when the pipeline has been stopped prematurely to consume and to not lose
+        the `Batch`es that were processed by the leaf `Step`s before stopping the pipeline."""
+        while not self._output_queue.empty():
+            batch = self._output_queue.get()
+            if batch is None:
+                continue
+
+            if batch.step_name in self.dag.leaf_steps:
+                self._write_buffer.add_batch(batch)  # type: ignore
+
+            self._handle_batch_on_stop(batch)
+
+    def _manage_batch_flow(self, batch: "_Batch") -> None:
+        """Checks if the step that generated the batch has more data in its buffer to
+        generate a new batch. If there's data, then a new batch is sent to the step. If
+        the step has no data in its buffer, then the predecessors generator steps are
+        requested to send a new batch.
+
+        Args:
+            batch: The batch that was processed.
+        """
+        assert self._batch_manager, "Batch manager is not set"
+
+        self._register_batch(batch)
+
+        route_to, do_not_route_to, routed = self._get_successors(batch)
+
+        # Keep track of the steps that the batch was routed to
+        if routed:
+            batch.batch_routed_to = route_to
+
+        self._set_next_expected_seq_no(
+            steps=do_not_route_to,
+            from_step=batch.step_name,
+            next_expected_seq_no=batch.seq_no + 1,
+        )
+
+        step = self._get_step_from_batch(batch)
+
+        # Add the batch to the successors input buffers
+        for successor in route_to:
+            # Copy batch to avoid modifying the same reference in the batch manager
+            batch_to_add = batch.copy() if len(route_to) > 1 else batch
+
+            self._batch_manager.add_batch(successor, batch_to_add)
+
+            # Check if the step is a generator and if there are successors that need data
+            # from this step. This usually happens when the generator `batch_size` is smaller
+            # than the `input_batch_size` of the successor steps.
+            if (
+                step.is_generator
+                and step.name in self._batch_manager.step_empty_buffers(successor)
+            ):
+                last_batch_sent = self._batch_manager.get_last_batch_sent(step.name)
+                self._send_batch_to_step(last_batch_sent.next_batch())  # type: ignore
+
+            # If successor step has enough data in its buffer to create a new batch, then
+            # send the batch to the step.
+            if new_batch := self._batch_manager.get_batch(successor):
+                self._send_batch_to_step(new_batch)
+
+        if not step.is_generator:
+            # Step ("this", the one from which the batch was received) has enough data on its
+            # buffers to create a new batch
+            if new_batch := self._batch_manager.get_batch(step.name):  # type: ignore
+                self._send_batch_to_step(new_batch)
+            else:
+                self._request_more_batches_if_needed(step)
+        else:
+            if len(self.dag) == 1:
+                self._request_batch_from_generator(step.name)  # type: ignore
+
+        self._cache()
+
+    def _send_to_step(self, step_name: str, to_send: Any) -> None:
+        """Sends something to the input queue of a step.
+
+        Args:
+            step_name: The name of the step.
+            to_send: The object to send.
+        """
+        input_queue = self.dag.get_step(step_name)[INPUT_QUEUE_ATTR_NAME]
+        input_queue.put(to_send)
+
+    def _send_batch_to_step(self, batch: "_Batch") -> None:
+        """Sends a batch to the input queue of a step, writing the data of the batch
+        to the filesystem and setting `batch.data_path` with the path where the data
+        was written (if requiered i.e. the step is a global step or `use_fs_to_pass_data`)
+
+        This method should be extended by the specific pipeline implementation, adding
+        the logic to send the batch to the step.
+
+        Args:
+            batch: The batch to send.
+        """
+        self._logger.debug(
+            f"Setting batch {batch.seq_no} as last batch sent to '{batch.step_name}': {batch}"
+        )
+        self._batch_manager.set_last_batch_sent(batch)  # type: ignore
+
+        step: "_Step" = self.dag.get_step(batch.step_name)[STEP_ATTR_NAME]
+        if not step.is_generator and (step.is_global or self._use_fs_to_pass_data):
+            base_path = UPath(self._storage_base_path) / step.name  # type: ignore
+            self._logger.debug(
+                f"Writing {batch.seq_no} batch for '{batch.step_name}' step to filesystem: {base_path}"
+            )
+            batch.write_batch_data_to_fs(self._fs, base_path)  # type: ignore
+
+        self._logger.debug(
+            f"Sending batch {batch.seq_no} to step '{batch.step_name}': {batch}"
+        )
+        self._send_to_step(batch.step_name, batch)
+
+    def _gather_requirements(self) -> List[str]:
+        """Extracts the requirements from the steps to be used in the pipeline.
+
+        Returns:
+            List of requirements gathered from the steps.
+        """
+        steps_requirements = []
+        for step in self.dag:
+            step_req = self.dag.get_step(step)[STEP_ATTR_NAME].requirements
+            steps_requirements.extend(step_req)
+
+        return steps_requirements
+
+    def _register_batch(self, batch: "_Batch") -> None:
+        """Registers a batch in the batch manager.
+
+        Args:
+            batch: The batch to register.
+        """
+        self._batch_manager.register_batch(batch)  # type: ignore
+        self._logger.debug(
+            f"Batch {batch.seq_no} from step '{batch.step_name}' registered in batch"
+            " manager"
+        )
+
+    def _send_last_batch_flag_to_step(self, step_name: str) -> None:
+        """Sends the `LAST_BATCH_SENT_FLAG` to a step to stop processing batches.
+
+        Args:
+            step_name: The name of the step.
+        """
+        self._logger.debug(
+            f"Sending `LAST_BATCH_SENT_FLAG` to '{step_name}' step to stop processing"
+            " batches..."
+        )
+
+        for _ in range(self.dag.get_step_replica_count(step_name)):
+            self._send_to_step(step_name, LAST_BATCH_SENT_FLAG)
+        self._batch_manager.set_last_batch_flag_sent_to(step_name)  # type: ignore
+
+    def _request_initial_batches(self) -> None:
+        """Requests the initial batches to the generator steps."""
+        assert self._batch_manager, "Batch manager is not set"
+
+        for step in self._batch_manager._steps.values():
+            if not self._is_step_running(step.step_name):
+                continue
+            if batch := step.get_batch():
+                self._logger.debug(
+                    f"Sending initial batch to '{step.step_name}' step: {batch}"
+                )
+                self._send_batch_to_step(batch)
+
+        for step_name in self.dag.root_steps:
+            if not self._is_step_running(step_name):
+                continue
+            seq_no = 0
+            if last_batch := self._batch_manager.get_last_batch(step_name):
+                seq_no = last_batch.seq_no + 1
+            batch = _Batch(seq_no=seq_no, step_name=step_name, last_batch=self._dry_run)
+            self._logger.debug(
+                f"Requesting initial batch to '{step_name}' generator step: {batch}"
+            )
+            self._send_batch_to_step(batch)
+
+    def _request_batch_from_generator(self, step_name: str) -> None:
+        """Request a new batch to a `GeneratorStep`.
+
+        Args:
+            step_name: the name of the `GeneratorStep` to which a batch has to be requested.
+        """
+        # Get the last batch that the previous step sent to generate the next batch
+        # (next `seq_no`).
+        last_batch = self._batch_manager.get_last_batch_sent(step_name)  # type: ignore
+        if last_batch is None:
+            return
+        self._send_batch_to_step(last_batch.next_batch())
+
+    def _request_more_batches_if_needed(self, step: "Step") -> None:
+        """Request more batches to the predecessors steps of `step` if needed.
+
+        Args:
+            step: The step of which it has to be checked if more batches are needed from
+                its predecessors.
+        """
+        empty_buffers = self._batch_manager.step_empty_buffers(step.name)  # type: ignore
+        for previous_step_name in empty_buffers:
+            # Only more batches can be requested to the `GeneratorStep`s as they are the
+            # only kind of steps that lazily generate batches.
+            if previous_step_name not in self.dag.root_steps:
+                continue
+
+            self._request_batch_from_generator(previous_step_name)
+
+    def _handle_batch_on_stop(self, batch: "_Batch") -> None:
+        """Handles a batch that was received from the output queue when the pipeline was
+        stopped. It will add and register the batch in the batch manager.
+
+        Args:
+            batch: The batch to handle.
+        """
+        assert self._batch_manager, "Batch manager is not set"
+
+        self._batch_manager.register_batch(batch)
+        step: "Step" = self.dag.get_step(batch.step_name)[STEP_ATTR_NAME]
+        for successor in self.dag.get_step_successors(step.name):  # type: ignore
+            self._batch_manager.add_batch(successor, batch)
+
+    def _get_step_from_batch(self, batch: "_Batch") -> "Step":
+        """Gets the `Step` instance from a batch.
+
+        Args:
+            batch: The batch to get the step from.
+
+        Returns:
+            The `Step` instance.
+        """
+        return self.dag.get_step(batch.step_name)[STEP_ATTR_NAME]
+
+    def _notify_steps_to_stop(self) -> None:
+        """Notifies the steps to stop their infinite running loop by sending `None` to
+        their input queues."""
+        with self._steps_load_status_lock:
+            for step_name, replicas in self._steps_load_status.items():
+                if replicas > 0:
+                    self._send_to_step(step_name, None)
+
+    def _get_successors(self, batch: "_Batch") -> Tuple[List[str], List[str], bool]:
+        """Gets the successors and the successors to which the batch has to be routed.
+
+        Args:
+            batch: The batch to which the successors will be determined.
+
+        Returns:
+            The successors to route the batch to and whether the batch was routed using
+            a routing function.
+        """
+        node = self.dag.get_step(batch.step_name)
+        step: "Step" = node[STEP_ATTR_NAME]
+        successors = list(self.dag.get_step_successors(step.name))  # type: ignore
+        route_to = successors
+
+        # Check if the step has a routing function to send the batch to specific steps
+        if routing_batch_function := node.get(ROUTING_BATCH_FUNCTION_ATTR_NAME):
+            route_to = routing_batch_function(batch, successors)
+            successors_str = ", ".join(f"'{successor}'" for successor in route_to)
+            self._logger.info(
+                f"🚏 Using '{step.name}' routing function to send batch {batch.seq_no} to steps: {successors_str}"
+            )
+
+        return route_to, list(set(successors) - set(route_to)), route_to != successors
+
+    def _set_next_expected_seq_no(
+        self, steps: List[str], from_step: str, next_expected_seq_no: int
+    ) -> None:
+        """Sets the next expected sequence number of a `_Batch` received by `step` from
+        `from_step`. This is necessary as some `Step`s might not receive all the batches
+        comming from the previous steps because there is a routing batch function.
+
+        Args:
+            steps: list of steps to which the next expected sequence number of a `_Batch`
+                from `from_step` has to be updated in the `_BatchManager`.
+            from_step: the name of the step from which the next expected sequence number
+                of a `_Batch` has to be updated in `steps`.
+            next_expected_seq_no: the number of the next expected sequence number of a `Batch`
+                from `from_step`.
+        """
+        assert self._batch_manager, "Batch manager is not set"
+
+        for step in steps:
+            self._batch_manager.set_next_expected_seq_no(
+                step_name=step,
+                from_step=from_step,
+                next_expected_seq_no=next_expected_seq_no,
+            )
+
+    @abstractmethod
+    def _teardown(self) -> None:
+        """Clean/release/stop resources reserved to run the pipeline."""
+        pass
+
+    @abstractmethod
+    def _set_steps_not_loaded_exception(self) -> None:
+        """Used to raise `RuntimeError` when the load of the steps failed.
+
+        Raises:
+            RuntimeError: containing the information and why a step failed to be loaded.
+        """
+        pass
+
+    @abstractmethod
+    def _stop(self) -> None:
+        """Stops the pipeline in a controlled way."""
+        pass
+
+    def _stop_load_queue_loop(self) -> None:
+        """Stops the `_load_queue` loop sending a `None`."""
+        self._logger.debug("Sending `None` to the load queue to notify stop...")
+        self._load_queue.put(None)
+
+    def _stop_output_queue_loop(self) -> None:
+        """Stops the `_output_queue` loop sending a `None`."""
+        self._logger.debug("Sending `None` to the output queue to notify stop...")
+        self._output_queue.put(None)
+
+    def _handle_keyboard_interrupt(self) -> Any:
+        """Handles KeyboardInterrupt signal sent during the Pipeline.run method.
+
+        It will try to call self._stop (if the pipeline didn't started yet, it won't
+        have any effect), and if the pool is already started, will close it before exiting
+        the program.
+
+        Returns:
+            The original `signal.SIGINT` handler.
+        """
+
+        def signal_handler(signumber: int, frame: Any) -> None:
+            self._stop()
+
+        return signal.signal(signal.SIGINT, signal_handler)
+
+
+base.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Dict, List, Union
+
+from pydantic import Field
+from typing_extensions import override
+
+from distilabel.constants import DISTILABEL_METADATA_KEY
+from distilabel.llms.base import LLM
+from distilabel.mixins.runtime_parameters import RuntimeParameter
+from distilabel.steps.base import (
+    GeneratorStep,
+    Step,
+    StepInput,
+    _Step,
+)
+from distilabel.utils.dicts import group_dicts
+
+if TYPE_CHECKING:
+    from distilabel.llms.typing import GenerateOutput
+    from distilabel.steps.tasks.typing import FormattedInput
+    from distilabel.steps.typing import StepOutput
+
+
+class _Task(_Step, ABC):
+    """_Task is an abstract class that implements the `_Step` interface and adds the
+    `format_input` and `format_output` methods to format the inputs and outputs of the
+    task. It also adds a `llm` attribute to be used as the LLM to generate the outputs.
+
+    Attributes:
+        llm: the `LLM` to be used to generate the outputs of the task.
+        group_generations: whether to group the `num_generations` generated per input in
+            a list or create a row per generation. Defaults to `False`.
+        add_raw_output: whether to include a field with the raw output of the LLM in the
+            `distilabel_metadata` field of the output. Can be helpful to not loose data
+            with `Tasks` that need to format the output of the `LLM`. Defaults to `False`.
+        num_generations: The number of generations to be produced per input.
+    """
+
+    llm: LLM
+
+    group_generations: bool = False
+    add_raw_output: RuntimeParameter[bool] = Field(
+        default=True,
+        description=(
+            "Whether to include the raw output of the LLM in the key `raw_output_<TASK_NAME>`"
+            " of the `distilabel_metadata` dictionary output column"
+        ),
+    )
+    num_generations: RuntimeParameter[int] = Field(
+        default=1, description="The number of generations to be produced per input."
+    )
+
+    def load(self) -> None:
+        """Loads the LLM via the `LLM.load()` method."""
+        super().load()
+        self.llm.load()
+
+    @override
+    def unload(self) -> None:
+        """Unloads the LLM."""
+        self._logger.debug("Executing task unload logic.")
+        self.llm.unload()
+
+    @abstractmethod
+    def format_output(
+        self,
+        output: Union[str, None],
+        input: Union[Dict[str, Any], None] = None,
+    ) -> Dict[str, Any]:
+        """Abstract method to format the outputs of the task. It needs to receive an output
+        as a string, and generates a Python dictionary with the outputs of the task. In
+        addition the `input` used to generate the output is also received just in case it's
+        needed to be able to parse the output correctly.
+        """
+        pass
+
+    def _format_outputs(
+        self,
+        outputs: "GenerateOutput",
+        input: Union[Dict[str, Any], None] = None,
+    ) -> List[Dict[str, Any]]:
+        """Formats the outputs of the task using the `format_output` method. If the output
+        is `None` (i.e. the LLM failed to generate a response), then the outputs will be
+        set to `None` as well.
+
+        Args:
+            outputs: The outputs (`n` generations) for the provided `input`.
+            input: The input used to generate the output.
+
+        Returns:
+            A list containing a dictionary with the outputs of the task for each input.
+        """
+        inputs = [None] if input is None else [input]
+
+        formatted_outputs = []
+        for output, input in zip(outputs, inputs * len(outputs)):  # type: ignore
+            try:
+                formatted_output = self.format_output(output, input)
+                formatted_output = self._maybe_add_raw_output(
+                    formatted_output,
+                    output,
+                    add_raw_output=self.add_raw_output,  # type: ignore
+                )
+                formatted_outputs.append(formatted_output)
+            except Exception as e:
+                self._logger.warning(  # type: ignore
+                    f"Task '{self.name}' failed to format output: {e}. Saving raw response."  # type: ignore
+                )
+                formatted_outputs.append(self._output_on_failure(output, input))
+        return formatted_outputs
+
+    def _output_on_failure(
+        self, output: Union[str, None], input: Union[Dict[str, Any], None] = None
+    ) -> Dict[str, Any]:
+        """In case of failure to format the output, this method will return a dictionary including
+        a new field `distilabel_meta` with the raw output of the LLM.
+        """
+        # Create a dictionary with the outputs of the task (every output set to None)
+        outputs = {output: None for output in self.outputs}
+        outputs["model_name"] = self.llm.model_name  # type: ignore
+        outputs = self._maybe_add_raw_output(
+            outputs,
+            output,
+            add_raw_output=self.add_raw_output,  # type: ignore
+        )
+        return outputs
+
+    def _maybe_add_raw_output(
+        self,
+        output: Dict[str, Any],
+        raw_output: Union[str, None],
+        add_raw_output: bool = True,
+    ) -> Dict[str, Any]:
+        """Adds the raw output of the LLM to the output dictionary if `add_raw_output` is True."""
+        if add_raw_output:
+            meta = output.get(DISTILABEL_METADATA_KEY, {})
+            meta[f"raw_output_{self.name}"] = raw_output
+            output[DISTILABEL_METADATA_KEY] = meta
+        return output
+
+
+class Task(_Task, Step):
+    """Task is a class that implements the `_Task` abstract class and adds the `Step`
+    interface to be used as a step in the pipeline.
+
+    Attributes:
+        llm: the `LLM` to be used to generate the outputs of the task.
+        group_generations: whether to group the `num_generations` generated per input in
+            a list or create a row per generation. Defaults to `False`.
+        num_generations: The number of generations to be produced per input.
+    """
+
+    @abstractmethod
+    def format_input(self, input: Dict[str, Any]) -> "FormattedInput":
+        """Abstract method to format the inputs of the task. It needs to receive an input
+        as a Python dictionary, and generates an OpenAI chat-like list of dicts."""
+        pass
+
+    def _format_inputs(self, inputs: List[Dict[str, Any]]) -> List["FormattedInput"]:
+        """Formats the inputs of the task using the `format_input` method.
+
+        Args:
+            inputs: A list of Python dictionaries with the inputs of the task.
+
+        Returns:
+            A list containing the formatted inputs, which are `ChatType`-like following
+            the OpenAI formatting.
+        """
+        return [self.format_input(input) for input in inputs]
+
+    def process(self, inputs: StepInput) -> "StepOutput":  # type: ignore
+        """Processes the inputs of the task and generates the outputs using the LLM.
+
+        Args:
+            inputs: A list of Python dictionaries with the inputs of the task.
+
+        Yields:
+            A list of Python dictionaries with the outputs of the task.
+        """
+
+        formatted_inputs = self._format_inputs(inputs)
+
+        # `outputs` is a list containing a list of generations per input
+        outputs = self.llm.generate(
+            inputs=formatted_inputs,
+            num_generations=self.num_generations,  # type: ignore
+            **self.llm.get_generation_kwargs(),  # type: ignore
+        )
+
+        task_outputs = []
+        for input, input_outputs in zip(inputs, outputs):
+            formatted_outputs = self._format_outputs(input_outputs, input)
+
+            if self.group_generations:
+                combined = group_dicts(*formatted_outputs)
+                task_outputs.append(
+                    {**input, **combined, "model_name": self.llm.model_name}
+                )
+                continue
+
+            # Create a row per generation
+            for formatted_output in formatted_outputs:
+                task_outputs.append(
+                    {**input, **formatted_output, "model_name": self.llm.model_name}
+                )
+
+        yield task_outputs
+
+
+class GeneratorTask(_Task, GeneratorStep):
+    """GeneratorTask is a class that implements the `_Task` abstract class and adds the
+    `GeneratorStep` interface to be used as a step in the pipeline.
+
+    Attributes:
+        llm: the `LLM` to be used to generate the outputs of the task.
+        group_generations: whether to group the `num_generations` generated per input in
+            a list or create a row per generation. Defaults to `False`.
+        num_generations: The number of generations to be produced per input.
+    """
+
+    pass
+
+
+decorator.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import inspect
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    List,
+    Literal,
+    Type,
+    Union,
+    overload,
+)
+
+from pydantic import create_model
+
+from distilabel.mixins.runtime_parameters import _RUNTIME_PARAMETER_ANNOTATION
+from distilabel.steps.base import (
+    _STEP_INPUT_ANNOTATION,
+    GeneratorStep,
+    GlobalStep,
+    Step,
+)
+from distilabel.utils.typing_ import is_parameter_annotated_with
+
+if TYPE_CHECKING:
+    from distilabel.steps.base import _Step
+    from distilabel.steps.typing import GeneratorStepOutput, StepOutput
+
+_STEP_MAPPING = {
+    "normal": Step,
+    "global": GlobalStep,
+    "generator": GeneratorStep,
+}
+
+ProcessingFunc = Callable[..., Union["StepOutput", "GeneratorStepOutput"]]
+
+
+@overload
+def step(
+    inputs: Union[List[str], None] = None,
+    outputs: Union[List[str], None] = None,
+    step_type: Literal["normal"] = "normal",
+) -> Callable[..., Type["Step"]]: ...
+
+
+@overload
+def step(
+    inputs: Union[List[str], None] = None,
+    outputs: Union[List[str], None] = None,
+    step_type: Literal["global"] = "global",
+) -> Callable[..., Type["GlobalStep"]]: ...
+
+
+@overload
+def step(
+    inputs: None = None,
+    outputs: Union[List[str], None] = None,
+    step_type: Literal["generator"] = "generator",
+) -> Callable[..., Type["GeneratorStep"]]: ...
+
+
+def step(
+    inputs: Union[List[str], None] = None,
+    outputs: Union[List[str], None] = None,
+    step_type: Literal["normal", "global", "generator"] = "normal",
+) -> Callable[..., Type["_Step"]]:
+    """Creates an `Step` from a processing function.
+
+    Args:
+        inputs: a list containing the name of the inputs columns/keys expected by this step.
+            If not provided the default will be an empty list `[]` and it will be assumed
+            that the step doesn't need any specific columns. Defaults to `None`.
+        outputs: a list containing the name of the outputs columns/keys that the step
+            will generate. If not provided the default will be an empty list `[]` and it
+            will be assumed that the step doesn't need any specific columns. Defaults to
+            `None`.
+        step_type: the kind of step to create. Valid choices are: "normal" (`Step`),
+            "global" (`GlobalStep`) or "generator" (`GeneratorStep`). Defaults to
+            `"normal"`.
+
+    Returns:
+        A callable that will generate the type given the processing function.
+
+    Example:
+
+    ```python
+    # Normal step
+    @step(inputs=["instruction"], outputs=["generation"])
+    def GenerationStep(inputs: StepInput, dummy_generation: RuntimeParameter[str]) -> StepOutput:
+        for input in inputs:
+            input["generation"] = dummy_generation
+        yield inputs
+
+    # Global step
+    @step(inputs=["instruction"], step_type="global")
+    def FilteringStep(inputs: StepInput, max_length: RuntimeParameter[int] = 256) -> StepOutput:
+        yield [
+            input
+            for input in inputs
+            if len(input["instruction"]) <= max_length
+        ]
+
+    # Generator step
+    @step(outputs=["num"], step_type="generator")
+    def RowGenerator(num_rows: RuntimeParameter[int] = 500) -> GeneratorStepOutput:
+        data = list(range(num_rows))
+        for i in range(0, len(data), 100):
+            last_batch = i + 100 >= len(data)
+            yield [{"num": num} for num in data[i : i + 100]], last_batch
+    ```
+    """
+
+    inputs = inputs or []
+    outputs = outputs or []
+
+    def decorator(func: ProcessingFunc) -> Type["_Step"]:
+        if step_type not in _STEP_MAPPING:
+            raise ValueError(
+                f"Invalid step type '{step_type}'. Please, review the '{func.__name__}'"
+                " function decorated with the `@step` decorator and provide a valid"
+                " `step_type`. Valid choices are: 'normal', 'global' or 'generator'."
+            )
+
+        BaseClass = _STEP_MAPPING[step_type]
+
+        signature = inspect.signature(func)
+
+        runtime_parameters = {
+            name: (
+                param.annotation,
+                param.default if param.default != param.empty else None,
+            )
+            for name, param in signature.parameters.items()
+        }
+
+        runtime_parameters = {}
+        step_input_parameter = None
+        for name, param in signature.parameters.items():
+            if is_parameter_annotated_with(param, _RUNTIME_PARAMETER_ANNOTATION):
+                runtime_parameters[name] = (
+                    param.annotation,
+                    param.default if param.default != param.empty else None,
+                )
+
+            if not step_type == "generator" and is_parameter_annotated_with(
+                param, _STEP_INPUT_ANNOTATION
+            ):
+                if step_input_parameter is not None:
+                    raise ValueError(
+                        f"Function '{func.__name__}' has more than one parameter annotated"
+                        f" with `StepInput`. Please, review the '{func.__name__}' function"
+                        " decorated with the `@step` decorator and provide only one"
+                        " argument annotated with `StepInput`."
+                    )
+                step_input_parameter = param
+
+        RuntimeParametersModel = create_model(  # type: ignore
+            "RuntimeParametersModel",
+            **runtime_parameters,  # type: ignore
+        )
+
+        def inputs_property(self) -> List[str]:
+            return inputs
+
+        def outputs_property(self) -> List[str]:
+            return outputs
+
+        def process(
+            self, *args: Any, **kwargs: Any
+        ) -> Union["StepOutput", "GeneratorStepOutput"]:
+            return func(*args, **kwargs)
+
+        return type(  # type: ignore
+            func.__name__,
+            (
+                BaseClass,
+                RuntimeParametersModel,
+            ),
+            {
+                "process": process,
+                "inputs": property(inputs_property),
+                "outputs": property(outputs_property),
+                "__module__": func.__module__,
+                "__doc__": func.__doc__,
+                "_built_from_decorator": True,
+                # Override the `get_process_step_input` method to return the parameter
+                # of the original function annotated with `StepInput`.
+                "get_process_step_input": lambda self: step_input_parameter,
+            },
+        )
+
+    return decorator
+
+
+data.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import TYPE_CHECKING, Any, Dict, List
+
+from typing_extensions import override
+
+from distilabel.steps.base import GeneratorStep
+
+if TYPE_CHECKING:
+    from distilabel.steps.typing import GeneratorStepOutput
+
+
+class LoadDataFromDicts(GeneratorStep):
+    """Loads a dataset from a list of dictionaries.
+
+    `GeneratorStep` that loads a dataset from a list of dictionaries and yields it in
+    batches.
+
+    Attributes:
+        data: The list of dictionaries to load the data from.
+
+    Runtime parameters:
+        - `batch_size`: The batch size to use when processing the data.
+
+    Output columns:
+        - dynamic (based on the keys found on the first dictionary of the list): The columns
+            of the dataset.
+
+    Categories:
+        - load
+
+    Examples:
+
+        Load data from a list of dictionaries:
+
+        ```python
+        from distilabel.steps import LoadDataFromDicts
+
+        loader = LoadDataFromDicts(
+            data=[{"instruction": "What are 2+2?"}] * 5,
+            batch_size=2
+        )
+        loader.load()
+
+        result = next(loader.process())
+        # >>> result
+        # ([{'instruction': 'What are 2+2?'}, {'instruction': 'What are 2+2?'}], False)
+        ```
+    """
+
+    data: List[Dict[str, Any]]
+
+    @override
+    def process(self, offset: int = 0) -> "GeneratorStepOutput":  # type: ignore
+        """Yields batches from a list of dictionaries.
+
+        Args:
+            offset: The offset to start the generation from. Defaults to `0`.
+
+        Yields:
+            A list of Python dictionaries as read from the inputs (propagated in batches)
+            and a flag indicating whether the yield batch is the last one.
+        """
+        if offset:
+            self.data = self.data[offset:]
+
+        while self.data:
+            batch = self.data[: self.batch_size]
+            self.data = self.data[self.batch_size :]
+            yield (
+                batch,
+                True if len(self.data) == 0 else False,
+            )
+
+    @property
+    def outputs(self) -> List[str]:
+        """Returns a list of strings with the names of the columns that the step will generate."""
+        return list(self.data[0].keys())
+
+
+self_instruct.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import sys
+
+if sys.version_info < (3, 9):
+    import importlib_resources
+else:
+    import importlib.resources as importlib_resources
+
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+from jinja2 import Template
+from pydantic import PrivateAttr
+
+from distilabel.steps.tasks.base import Task
+
+if TYPE_CHECKING:
+    from distilabel.steps.tasks.typing import ChatType
+
+
+class SelfInstruct(Task):
+    """Generate instructions based on a given input using an `LLM`.
+
+    `SelfInstruct` is a pre-defined task that, given a number of instructions, a
+    certain criteria for query generations, an application description, and an input,
+    generates a number of instruction related to the given input and following what
+    is stated in the criteria for query generation and the application description.
+    It is based in the SelfInstruct framework from the paper "Self-Instruct: Aligning
+    Language Models with Self-Generated Instructions".
+
+    Attributes:
+        num_instructions: The number of instructions to be generated. Defaults to 5.
+        criteria_for_query_generation: The criteria for the query generation. Defaults
+            to the criteria defined within the paper.
+        application_description: The description of the AI application that one want
+            to build with these instructions. Defaults to `AI assistant`.
+
+    Input columns:
+        - input (`str`): The input to generate the instructions. It's also called seed in
+            the paper.
+
+    Output columns:
+        - instructions (`List[str]`): The generated instructions.
+        - model_name (`str`): The model name used to generate the instructions.
+
+    Categories:
+        - text-generation
+
+    Reference:
+        - [`Self-Instruct: Aligning Language Models with Self-Generated Instructions`](https://arxiv.org/abs/2212.10560)
+
+    Examples:
+
+        Generate instructions based on a given input:
+
+        ```python
+        from distilabel.steps.tasks import SelfInstruct
+        from distilabel.llms.huggingface import InferenceEndpointsLLM
+
+        self_instruct = SelfInstruct(
+            llm=InferenceEndpointsLLM(
+                model_id="mistralai/Mistral-7B-Instruct-v0.2",
+            ),
+            num_instructions=5,  # This is the default value
+        )
+
+        self_instruct.load()
+
+        result = next(self_instruct.process([{"input": "instruction"}]))
+        # result
+        # [
+        #     {
+        #         'input': 'instruction',
+        #         'model_name': 'mistralai/Mistral-7B-Instruct-v0.2',
+        #         'instructions': ["instruction 1", "instruction 2", "instruction 3", "instruction 4", "instruction 5"],
+        #     }
+        # ]
+        ```
+
+    Citations:
+
+        ```
+        @misc{wang2023selfinstructaligninglanguagemodels,
+            title={Self-Instruct: Aligning Language Models with Self-Generated Instructions},
+            author={Yizhong Wang and Yeganeh Kordi and Swaroop Mishra and Alisa Liu and Noah A. Smith and Daniel Khashabi and Hannaneh Hajishirzi},
+            year={2023},
+            eprint={2212.10560},
+            archivePrefix={arXiv},
+            primaryClass={cs.CL},
+            url={https://arxiv.org/abs/2212.10560},
+        }
+        ```
+    """
+
+    num_instructions: int = 5
+    criteria_for_query_generation: str = (
+        "Incorporate a diverse range of verbs, avoiding repetition.\n"
+        "Ensure queries are compatible with AI model's text generation functions and are limited to 1-2 sentences.\n"
+        "Design queries to be self-contained and standalone.\n"
+        'Blend interrogative (e.g., "What is the significance of x?") and imperative (e.g., "Detail the process of x.") styles.'
+    )
+    application_description: str = "AI assistant"
+
+    _template: Union[Template, None] = PrivateAttr(...)
+
+    def load(self) -> None:
+        """Loads the Jinja2 template."""
+        super().load()
+
+        _path = str(
+            importlib_resources.files("distilabel")
+            / "steps"
+            / "tasks"
+            / "templates"
+            / "self-instruct.jinja2"
+        )
+
+        self._template = Template(open(_path).read())
+
+    @property
+    def inputs(self) -> List[str]:
+        """The input for the task is the `input` i.e. seed text."""
+        return ["input"]
+
+    def format_input(self, input: Dict[str, Any]) -> "ChatType":
+        """The input is formatted as a `ChatType` assuming that the instruction
+        is the first interaction from the user within a conversation."""
+        return [
+            {
+                "role": "user",
+                "content": self._template.render(
+                    input=input["input"],
+                    application_description=self.application_description,
+                    criteria_for_query_generation=self.criteria_for_query_generation,
+                    num_instructions=self.num_instructions,
+                ),
+            }
+        ]
+
+    @property
+    def outputs(self):
+        """The output for the task is a list of `instructions` containing the generated instructions."""
+        return ["instructions", "model_name"]
+
+    def format_output(
+        self,
+        output: Union[str, None],
+        input: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """The output is formatted as a list with the generated instructions.
+
+        Args:
+            output: the raw output of the LLM.
+            input: the input to the task. Used for obtaining the number of responses.
+
+        Returns:
+            A dict with containing the generated instructions.
+        """
+        if output is None:
+            return {"instructions": []}
+        return {"instructions": [line for line in output.split("\n") if line != ""]}
+
+
+quality_scorer.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import re
+import sys
+
+if sys.version_info < (3, 9):
+    import importlib_resources
+else:
+    import importlib.resources as importlib_resources
+
+from typing import Any, Dict, List, Union
+
+from jinja2 import Template
+from pydantic import PrivateAttr
+
+from distilabel.steps.tasks.base import Task
+from distilabel.steps.tasks.typing import ChatType
+
+_PARSE_SCORE_LINE_REGEX = re.compile(r"\[\d+\] score: (\d+)", re.IGNORECASE)
+
+
+class QualityScorer(Task):
+    """Score responses based on their quality using an `LLM`.
+
+    `QualityScorer` is a pre-defined task that defines the `instruction` as the input
+    and `score` as the output. This task is used to rate the quality of instructions and responses.
+    It's an implementation of the quality score task from the paper 'What Makes Good Data
+    for Alignment? A Comprehensive Study of Automatic Data Selection in Instruction Tuning'.
+    The task follows the same scheme as the Complexity Scorer, but the instruction-response pairs
+    are scored in terms of quality, obtaining a quality score for each instruction.
+
+    Attributes:
+        _template: a Jinja2 template used to format the input for the LLM.
+
+    Input columns:
+        - instruction (`str`): The instruction that was used to generate the `responses`.
+        - responses (`List[str]`): The responses to be scored. Each response forms a pair with the instruction.
+
+    Output columns:
+        - scores (`List[float]`): The score for each instruction.
+        - model_name (`str`): The model name used to generate the scores.
+
+    Categories:
+        - scorer
+        - quality
+        - response
+
+    References:
+        - [`What Makes Good Data for Alignment? A Comprehensive Study of Automatic Data Selection in Instruction Tuning`](https://arxiv.org/abs/2312.15685)
+
+    Examples:
+
+        Evaluate the quality of your instructions:
+
+        ```python
+        from distilabel.steps.tasks import QualityScorer
+        from distilabel.llms.huggingface import InferenceEndpointsLLM
+
+        # Consider this as a placeholder for your actual LLM.
+        scorer = QualityScorer(
+            llm=InferenceEndpointsLLM(
+                model_id="mistralai/Mistral-7B-Instruct-v0.2",
+            )
+        )
+
+        scorer.load()
+
+        result = next(
+            scorer.process(
+                [
+                    {
+                        "instruction": "instruction",
+                        "responses": ["good response", "weird response", "bad response"]
+                    }
+                ]
+            )
+        )
+        # result
+        [
+            {
+                'instructions': 'instruction',
+                'model_name': 'test',
+                'scores': [5, 3, 1],
+            }
+        ]
+        ```
+
+    Citations:
+
+        ```
+        @misc{liu2024makesgooddataalignment,
+            title={What Makes Good Data for Alignment? A Comprehensive Study of Automatic Data Selection in Instruction Tuning},
+            author={Wei Liu and Weihao Zeng and Keqing He and Yong Jiang and Junxian He},
+            year={2024},
+            eprint={2312.15685},
+            archivePrefix={arXiv},
+            primaryClass={cs.CL},
+            url={https://arxiv.org/abs/2312.15685},
+        }
+        ```
+    """
+
+    _template: Union[Template, None] = PrivateAttr(...)
+
+    def load(self) -> None:
+        """Loads the Jinja2 template."""
+        super().load()
+
+        _path = str(
+            importlib_resources.files("distilabel")
+            / "steps"
+            / "tasks"
+            / "templates"
+            / "quality-scorer.jinja2"
+        )
+
+        self._template = Template(open(_path).read())
+
+    @property
+    def inputs(self) -> List[str]:
+        """The inputs for the task are `instruction` and `responses`."""
+        return ["instruction", "responses"]
+
+    def format_input(self, input: Dict[str, Any]) -> ChatType:  # type: ignore
+        """The input is formatted as a `ChatType` assuming that the instruction
+        is the first interaction from the user within a conversation."""
+        return [
+            {
+                "role": "user",
+                "content": self._template.render(  # type: ignore
+                    instruction=input["instruction"], responses=input["responses"]
+                ),
+            }
+        ]
+
+    @property
+    def outputs(self):
+        """The output for the task is a list of `scores` containing the quality score for each
+        response in `responses`."""
+        return ["scores", "model_name"]
+
+    def format_output(
+        self, output: Union[str, None], input: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """The output is formatted as a list with the score of each instruction-response pair.
+
+        Args:
+            output: the raw output of the LLM.
+            input: the input to the task. Used for obtaining the number of responses.
+
+        Returns:
+            A dict with the key `scores` containing the scores for each instruction-response pair.
+        """
+        if output is None:
+            return {"scores": [None] * len(input["responses"])}
+
+        scores = []
+        score_lines = output.split("\n")
+
+        for i, line in enumerate(score_lines):
+            match = _PARSE_SCORE_LINE_REGEX.match(line)
+            score = float(match.group(1)) if match else None
+            scores.append(score)
+            if i == len(input["responses"]) - 1:
+                break
+        return {"scores": scores}
+
+
+base.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import inspect
+import logging
+import re
+from abc import ABC, abstractmethod
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, overload
+
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PrivateAttr
+from typing_extensions import Annotated, Self
+
+from distilabel.mixins.requirements import RequirementsMixin
+from distilabel.mixins.runtime_parameters import (
+    RuntimeParameter,
+    RuntimeParametersMixin,
+)
+from distilabel.utils.serialization import _Serializable
+from distilabel.utils.typing_ import is_parameter_annotated_with
+
+if TYPE_CHECKING:
+    from logging import Logger
+
+    from distilabel.pipeline.base import BasePipeline
+    from distilabel.pipeline.routing_batch_function import RoutingBatchFunction
+    from distilabel.pipeline.typing import (
+        DownstreamConnectable,
+        DownstreamConnectableSteps,
+        UpstreamConnectableSteps,
+    )
+    from distilabel.steps.typing import GeneratorStepOutput, StepOutput
+
+
+DEFAULT_INPUT_BATCH_SIZE = 50
+
+
+_STEP_INPUT_ANNOTATION = "distilabel_step_input"
+StepInput = Annotated[List[Dict[str, Any]], _STEP_INPUT_ANNOTATION]
+"""StepInput is just an `Annotated` alias of the typing `List[Dict[str, Any]]` with
+extra metadata that allows `distilabel` to perform validations over the `process` step
+method defined in each `Step`"""
+
+# Pattern to convert PascalCase to snake_case
+PATTERN_PASCAL_NAME = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _infer_step_name(
+    step_cls_name: str, pipeline: Optional["BasePipeline"] = None
+) -> str:
+    """Infer the name of the step based on the class name and the pipeline.
+
+    If a `Pipeline` is given (the general case), it will check if the name already exists
+    in the steps of the `DAG`, to add a number at the end of the name.
+
+    Args:
+        step_cls_name: The step class name, as obtained by `type(cls).__name__`.
+        pipeline: The `Pipeline` the step belongs to, can be `None` if the step is created
+            outside of a `Pipeline`.
+
+    Returns:
+        A name for the step.
+
+    Example:
+        ```python
+        >>> _infer_step_name("StepWithOnePreviousStep", None)
+        'step_with_one_previous_step'
+        ```
+    """
+    name = re.sub(PATTERN_PASCAL_NAME, "_", step_cls_name).lower() + "_0"
+    if pipeline:
+        # Check the name doesn't already exist in the pipeline
+        step_names = set(pipeline.dag.G)
+        parts = name.split("_")
+        base_name = "_".join(parts[:-1])
+        while name in step_names:
+            idx = int(name.split("_")[-1])
+            name = f"{base_name}_{idx+1}"
+    return name
+
+
+class StepResources(RuntimeParametersMixin, BaseModel):
+    """A class to define the resources assigned to a `_Step`.
+
+    Attributes:
+        replicas: The number of replicas for the step.
+        cpus: The number of CPUs assigned to each step replica.
+        gpus: The number of GPUs assigned to each step replica.
+        memory: The memory in bytes required for each step replica.
+        resources: A dictionary containing the number of custom resources required for
+            each step replica.
+    """
+
+    replicas: RuntimeParameter[PositiveInt] = Field(
+        default=1, description="The number of replicas for the step."
+    )
+    cpus: Optional[RuntimeParameter[PositiveInt]] = Field(
+        default=None, description="The number of CPUs assigned to each step replica."
+    )
+    gpus: Optional[RuntimeParameter[PositiveInt]] = Field(
+        default=None, description="The number of GPUs assigned to each step replica."
+    )
+    memory: Optional[RuntimeParameter[PositiveInt]] = Field(
+        default=None, description="The memory in bytes required for each step replica."
+    )
+    resources: Optional[RuntimeParameter[Dict[str, int]]] = Field(
+        default=None,
+        description="A dictionary containing names of custom resources and the"
+        " number of those resources required for each step replica.",
+    )
+
+
+class _Step(RuntimeParametersMixin, RequirementsMixin, BaseModel, _Serializable, ABC):
+    """Base class for the steps that can be included in a `Pipeline`.
+
+    A `Step` is a class defining some processing logic. The input and outputs for this
+    processing logic are lists of dictionaries with the same keys:
+
+        ```python
+        [
+            {"column1": "value1", "column2": "value2", ...},
+            {"column1": "value1", "column2": "value2", ...},
+            {"column1": "value1", "column2": "value2", ...},
+        ]
+        ```
+
+    The processing logic is defined in the `process` method, which depending on the
+    number of previous steps, can receive more than one list of dictionaries, each with
+    the output of the previous steps. In order to make `distilabel` know where the outputs
+    from the previous steps are, the `process` function from each `Step` must have an argument
+    or positional argument annotated with `StepInput`.
+
+        ```python
+        class StepWithOnePreviousStep(Step):
+            def process(self, inputs: StepInput) -> StepOutput:
+                yield [...]
+
+        class StepWithSeveralPreviousStep(Step):
+            # mind the * to indicate that the argument is a list of StepInput
+            def process(self, inputs: *StepInput) -> StepOutput:
+                yield [...]
+        ```
+
+    In order to perform static validations and to check that the chaining of the steps
+    in the pipeline is valid, a `Step` must also define the `inputs` and `outputs`
+    properties:
+
+    - `inputs`: a list of strings with the names of the columns that the step needs as
+        input. It can be an empty list if the step is a generator step.
+    - `outputs`: a list of strings with the names of the columns that the step will
+        produce as output.
+
+    Optionally, a `Step` can override the `load` method to perform any initialization
+    logic before the `process` method is called. For example, to load an LLM, stablish a
+    connection to a database, etc.
+
+    Finally, the `Step` class inherits from `pydantic.BaseModel`, so attributes can be easily
+    defined, validated, serialized and included in the `__init__` method of the step.
+    """
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        validate_default=True,
+        validate_assignment=True,
+        extra="forbid",
+    )
+
+    name: Optional[str] = Field(default=None, pattern=r"^[a-zA-Z0-9_-]+$")
+    resources: StepResources = StepResources()
+    pipeline: Any = Field(default=None, exclude=True, repr=False)
+    input_mappings: Dict[str, str] = {}
+    output_mappings: Dict[str, str] = {}
+
+    _built_from_decorator: bool = PrivateAttr(default=False)
+    _logger: "Logger" = PrivateAttr(None)
+
+    def model_post_init(self, __context: Any) -> None:
+        from distilabel.pipeline.base import _GlobalPipelineManager
+
+        super().model_post_init(__context)
+
+        if self.pipeline is None:
+            self.pipeline = _GlobalPipelineManager.get_pipeline()
+
+        if self.pipeline is None:
+            _logger = logging.getLogger(f"distilabel.step.{self.name}")
+            _logger.warning(
+                f"Step '{self.name}' hasn't received a pipeline, and it hasn't been"
+                " created within a `Pipeline` context. Please, use"
+                " `with Pipeline() as pipeline:` and create the step within the context."
+            )
+
+        if not self.name:
+            # This must be done before the check for repeated names, but assuming
+            # we are passing the pipeline from the _GlobalPipelineManager, should
+            # be done after that.
+            self.name = _infer_step_name(type(self).__name__, self.pipeline)
+
+        if self.pipeline is not None:
+            # If not set an error will be raised in `Pipeline.run` parent
+            self.pipeline._add_step(self)
+
+    def connect(
+        self,
+        *steps: "_Step",
+        routing_batch_function: Optional["RoutingBatchFunction"] = None,
+    ) -> None:
+        """Connects the current step to another step in the pipeline, which means that
+        the output of this step will be the input of the other step.
+
+        Args:
+            steps: The steps to connect to the current step.
+            routing_batch_function: A function that receives a list of steps and returns
+                a list of steps to which the output batch generated by this step should be
+                routed. It should be used to define the routing logic of the pipeline. If
+                not provided, the output batch will be routed to all the connected steps.
+                Defaults to `None`.
+        """
+        assert self.pipeline is not None
+
+        if routing_batch_function:
+            self._set_routing_batch_function(routing_batch_function)
+
+        for step in steps:
+            self.pipeline._add_edge(from_step=self.name, to_step=step.name)  # type: ignore
+
+    def _set_routing_batch_function(
+        self, routing_batch_function: "RoutingBatchFunction"
+    ) -> None:
+        """Sets a routing batch function for the batches generated by this step, so they
+        get routed to specific downstream steps.
+
+        Args:
+            routing_batch_function: The routing batch function that will be used to route
+                the batches generated by this step.
+        """
+        self.pipeline._add_routing_batch_function(
+            step_name=self.name,  # type: ignore
+            routing_batch_function=routing_batch_function,
+        )
+        routing_batch_function._step = self
+
+    @overload
+    def __rshift__(self, other: "RoutingBatchFunction") -> "RoutingBatchFunction": ...
+
+    @overload
+    def __rshift__(
+        self, other: List["DownstreamConnectableSteps"]
+    ) -> List["DownstreamConnectableSteps"]: ...
+
+    @overload
+    def __rshift__(self, other: "DownstreamConnectable") -> "DownstreamConnectable": ...
+
+    def __rshift__(
+        self,
+        other: Union[
+            "DownstreamConnectable",
+            "RoutingBatchFunction",
+            List["DownstreamConnectableSteps"],
+        ],
+    ) -> Union[
+        "DownstreamConnectable",
+        "RoutingBatchFunction",
+        List["DownstreamConnectableSteps"],
+    ]:
+        """Allows using the `>>` operator to connect steps in the pipeline.
+
+        Args:
+            other: The step to connect, a list of steps to connect to or a routing batch
+                function to be set for the step.
+
+        Returns:
+            The connected step, the list of connected steps or the routing batch function.
+
+        Example:
+            ```python
+            step1 >> step2
+            # Would be equivalent to:
+            step1.connect(step2)
+
+            # It also allows to connect a list of steps
+            step1 >> [step2, step3]
+            ```
+        """
+        # Here to avoid circular imports
+        from distilabel.pipeline.routing_batch_function import RoutingBatchFunction
+
+        if isinstance(other, list):
+            self.connect(*other)
+            return other
+
+        if isinstance(other, RoutingBatchFunction):
+            self._set_routing_batch_function(other)
+            return other
+
+        self.connect(other)
+        return other
+
+    def __rrshift__(self, other: List["UpstreamConnectableSteps"]) -> Self:
+        """Allows using the [step1, step2] >> step3 operator to connect a list of steps in the pipeline
+        to a single step, as the list doesn't have the __rshift__ operator.
+
+        Args:
+            other: The step to connect to.
+
+        Returns:
+            The connected step
+
+        Example:
+            ```python
+            [step2, step3] >> step1
+            # Would be equivalent to:
+            step2.connect(step1)
+            step3.connect(step1)
+            ```
+        """
+        for o in other:
+            o.connect(self)
+        return self
+
+    def load(self) -> None:
+        """Method to perform any initialization logic before the `process` method is
+        called. For example, to load an LLM, stablish a connection to a database, etc.
+        """
+        self._logger = logging.getLogger(f"distilabel.step.{self.name}")
+
+    def unload(self) -> None:
+        """Method to perform any cleanup logic after the `process` method is called. For
+        example, to close a connection to a database, etc.
+        """
+        self._logger.debug("Executing step unload logic.")
+
+    @property
+    def is_generator(self) -> bool:
+        """Whether the step is a generator step or not.
+
+        Returns:
+            `True` if the step is a generator step, `False` otherwise.
+        """
+        return isinstance(self, GeneratorStep)
+
+    @property
+    def is_global(self) -> bool:
+        """Whether the step is a global step or not.
+
+        Returns:
+            `True` if the step is a global step, `False` otherwise.
+        """
+        return isinstance(self, GlobalStep)
+
+    @property
+    def is_normal(self) -> bool:
+        """Whether the step is a normal step or not.
+
+        Returns:
+            `True` if the step is a normal step, `False` otherwise.
+        """
+        return not self.is_generator and not self.is_global
+
+    @property
+    def inputs(self) -> List[str]:
+        """List of strings with the names of the columns that the step needs as input.
+
+        Returns:
+            List of strings with the names of the columns that the step needs as input.
+        """
+        return []
+
+    @property
+    def outputs(self) -> List[str]:
+        """List of strings with the names of the columns that the step will produce as
+        output.
+
+        Returns:
+            List of strings with the names of the columns that the step will produce as
+            output.
+        """
+        return []
+
+    @cached_property
+    def process_parameters(self) -> List[inspect.Parameter]:
+        """Returns the parameters of the `process` method of the step.
+
+        Returns:
+            The parameters of the `process` method of the step.
+        """
+        return list(inspect.signature(self.process).parameters.values())  # type: ignore
+
+    def has_multiple_inputs(self) -> bool:
+        """Whether the `process` method of the step receives more than one input or not
+        i.e. has a `*` argument annotated with `StepInput`.
+
+        Returns:
+            `True` if the `process` method of the step receives more than one input,
+            `False` otherwise.
+        """
+        return any(
+            param.kind == param.VAR_POSITIONAL for param in self.process_parameters
+        )
+
+    def get_process_step_input(self) -> Union[inspect.Parameter, None]:
+        """Returns the parameter of the `process` method of the step annotated with
+        `StepInput`.
+
+        Returns:
+            The parameter of the `process` method of the step annotated with `StepInput`,
+            or `None` if there is no parameter annotated with `StepInput`.
+
+        Raises:
+            TypeError: If the step has more than one parameter annotated with `StepInput`.
+        """
+        step_input_parameter = None
+        for parameter in self.process_parameters:
+            if is_parameter_annotated_with(parameter, _STEP_INPUT_ANNOTATION):
+                if step_input_parameter is not None:
+                    raise TypeError(
+                        f"Step '{self.name}' should have only one parameter with type"
+                        " hint `StepInput`."
+                    )
+                step_input_parameter = parameter
+        return step_input_parameter
+
+    def verify_inputs_mappings(self) -> None:
+        """Verifies that the `inputs_mappings` of the step are valid i.e. the input
+        columns exist in the inputs of the step.
+
+        Raises:
+            ValueError: If the `inputs_mappings` of the step are not valid.
+        """
+        if not self.input_mappings:
+            return
+
+        for input in self.input_mappings:
+            if input not in self.inputs:
+                raise ValueError(
+                    f"The input column '{input}' doesn't exist in the inputs of the"
+                    f" step '{self.name}'. Inputs of the step are: {self.inputs}."
+                    " Please, review the `inputs_mappings` argument of the step."
+                )
+
+    def verify_outputs_mappings(self) -> None:
+        """Verifies that the `outputs_mappings` of the step are valid i.e. the output
+        columns exist in the outputs of the step.
+
+        Raises:
+            ValueError: If the `outputs_mappings` of the step are not valid.
+        """
+        if not self.output_mappings:
+            return
+
+        for output in self.output_mappings:
+            if output not in self.outputs:
+                raise ValueError(
+                    f"The output column '{output}' doesn't exist in the outputs of the"
+                    f" step '{self.name}'. Outputs of the step are: {self.outputs}."
+                    " Please, review the `outputs_mappings` argument of the step."
+                )
+
+    def get_inputs(self) -> List[str]:
+        """Gets the inputs of the step after the `input_mappings`. This method is meant
+        to be used to run validations on the inputs of the step.
+
+        Returns:
+            The inputs of the step after the `input_mappings`.
+        """
+        return [self.input_mappings.get(input, input) for input in self.inputs]
+
+    def get_outputs(self) -> List[str]:
+        """Gets the outputs of the step after the `outputs_mappings`. This method is
+        meant to be used to run validations on the outputs of the step.
+
+        Returns:
+            The outputs of the step after the `outputs_mappings`.
+        """
+        return [self.output_mappings.get(output, output) for output in self.outputs]
+
+    def _model_dump(self, obj: Any, **kwargs: Any) -> Dict[str, Any]:
+        dump = super()._model_dump(obj, **kwargs)
+        dump["runtime_parameters_info"] = self.get_runtime_parameters_info()
+        return dump
+
+
+class Step(_Step, ABC):
+    """Base class for the steps that can be included in a `Pipeline`.
+
+    Attributes:
+        input_batch_size: The number of rows that will contain the batches processed by
+            the step. Defaults to `50`.
+
+    Runtime parameters:
+        - `input_batch_size`: The number of rows that will contain the batches processed
+            by the step. Defaults to `50`.
+    """
+
+    input_batch_size: RuntimeParameter[PositiveInt] = Field(
+        default=DEFAULT_INPUT_BATCH_SIZE,
+        description="The number of rows that will contain the batches processed by the"
+        " step.",
+    )
+
+    @abstractmethod
+    def process(self, *inputs: StepInput) -> "StepOutput":
+        """Method that defines the processing logic of the step. It should yield the
+        output rows.
+
+        Args:
+            *inputs: An argument used to receive the outputs of the previous steps. The
+                number of arguments depends on the number of previous steps. It doesn't
+                need to be an `*args` argument, it can be a regular argument annotated
+                with `StepInput` if the step has only one previous step.
+        """
+        pass
+
+    def process_applying_mappings(self, *args: List[Dict[str, Any]]) -> "StepOutput":
+        """Runs the `process` method of the step applying the `input_mappings` to the input
+        rows and the `outputs_mappings` to the output rows. This is the function that
+        should be used to run the processing logic of the step.
+
+        Yields:
+            The output rows.
+        """
+
+        inputs = self._apply_input_mappings(args) if self.input_mappings else args
+
+        # If the `Step` was built using the `@step` decorator, then we need to pass
+        # the runtime parameters as kwargs, so they can be used within the processing
+        # function
+        generator = (
+            self.process(*inputs)
+            if not self._built_from_decorator
+            else self.process(*inputs, **self._runtime_parameters)
+        )
+
+        for output_rows in generator:
+            yield [
+                {
+                    # Apply output mapping and revert input mapping
+                    self.output_mappings.get(k, None)
+                    or self.input_mappings.get(k, None)
+                    or k: v
+                    for k, v in row.items()
+                }
+                for row in output_rows
+            ]
+
+    def _revert_input_mappings(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Reverts the `input_mappings` of the step to the input row.
+
+        Args:
+            input: The input row.
+
+        Returns:
+            The input row with the `input_mappings` reverted.
+        """
+        return {self.input_mappings.get(k, k): v for k, v in input.items()}
+
+    def _apply_input_mappings(
+        self, inputs: Tuple[List[Dict[str, Any]], ...]
+    ) -> List[List[Dict[str, Any]]]:
+        """Applies the `input_mappings` to the input rows.
+
+        Args:
+            inputs: The input rows.
+
+        Returns:
+            The input rows with the `input_mappings` applied.
+        """
+        reverted_input_mappings = {v: k for k, v in self.input_mappings.items()}
+
+        return [
+            [
+                {reverted_input_mappings.get(k, k): v for k, v in row.items()}
+                for row in row_inputs
+            ]
+            for row_inputs in inputs
+        ]
+
+
+class GeneratorStep(_Step, ABC):
+    """A special kind of `Step` that is able to generate data i.e. it doesn't receive
+    any input from the previous steps.
+
+    Attributes:
+        batch_size: The number of rows that will contain the batches generated by the
+            step. Defaults to `50`.
+
+    Runtime parameters:
+        - `batch_size`: The number of rows that will contain the batches generated by
+            the step. Defaults to `50`.
+    """
+
+    batch_size: RuntimeParameter[int] = Field(
+        default=50,
+        description="The number of rows that will contain the batches generated by the"
+        " step.",
+    )
+
+    @abstractmethod
+    def process(self, offset: int = 0) -> "GeneratorStepOutput":
+        """Method that defines the generation logic of the step. It should yield the
+        output rows and a boolean indicating if it's the last batch or not.
+
+        Args:
+            offset: The offset to start the generation from. Defaults to 0.
+
+        Yields:
+            The output rows and a boolean indicating if it's the last batch or not.
+        """
+        pass
+
+    def process_applying_mappings(self, offset: int = 0) -> "GeneratorStepOutput":
+        """Runs the `process` method of the step applying the `outputs_mappings` to the
+        output rows. This is the function that should be used to run the generation logic
+        of the step.
+
+        Args:
+            offset: The offset to start the generation from. Defaults to 0.
+
+        Yields:
+            The output rows and a boolean indicating if it's the last batch or not.
+        """
+
+        # If the `Step` was built using the `@step` decorator, then we need to pass
+        # the runtime parameters as `kwargs`, so they can be used within the processing
+        # function
+        generator = (
+            self.process(offset=offset)
+            if not self._built_from_decorator
+            else self.process(offset=offset, **self._runtime_parameters)
+        )
+
+        for output_rows, last_batch in generator:
+            yield (
+                [
+                    {self.output_mappings.get(k, k): v for k, v in row.items()}
+                    for row in output_rows
+                ],
+                last_batch,
+            )
+
+
+class GlobalStep(Step, ABC):
+    """A special kind of `Step` which it's `process` method receives all the data processed
+    by their previous steps at once, instead of receiving it in batches. This kind of steps
+    are useful when the processing logic requires to have all the data at once, for example
+    to train a model, to perform a global aggregation, etc.
+    """
+
+    @property
+    def inputs(self) -> List[str]:
+        return []
+
+    @property
+    def outputs(self) -> List[str]:
+        return []
+
+
+structured_generation_with_outlines.py
+# Copyright 2023-present, Argilla, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from enum import Enum
+from pathlib import Path
+
+from distilabel.llms import LlamaCppLLM
+from distilabel.pipeline import Pipeline
+from distilabel.steps import LoadDataFromDicts
+from distilabel.steps.tasks import TextGeneration
+from pydantic import BaseModel, StringConstraints, conint
+from typing_extensions import Annotated
+
+
+class Weapon(str, Enum):
+    sword = "sword"
+    axe = "axe"
+    mace = "mace"
+    spear = "spear"
+    bow = "bow"
+    crossbow = "crossbow"
+
+
+class Armor(str, Enum):
+    leather = "leather"
+    chainmail = "chainmail"
+    plate = "plate"
+    mithril = "mithril"
+
+
+class Character(BaseModel):
+    name: Annotated[str, StringConstraints(max_length=30)]
+    age: conint(gt=1, lt=3000)
+    armor: Armor
+    weapon: Weapon
+
+
+# Download the model with
+# curl -L -o ~/Downloads/openhermes-2.5-mistral-7b.Q4_K_M.gguf https://huggingface.co/TheBloke/OpenHermes-2.5-Mistral-7B-GGUF/resolve/main/openhermes-2.5-mistral-7b.Q4_K_M.gguf
+
+model_path = "Downloads/openhermes-2.5-mistral-7b.Q4_K_M.gguf"
+
+with Pipeline("RPG-characters") as pipeline:
+    system_prompt = (
+        "You are a leading role play gamer. You have seen thousands of different characters and their attributes."
+        " Please return a JSON object with common attributes of an RPG character."
+    )
+
+    load_dataset = LoadDataFromDicts(
+        name="load_instructions",
+        data=[
+            {
+                "system_prompt": system_prompt,
+                "instruction": f"Give me a character description for a {char}",
+            }
+            for char in ["dwarf", "elf", "human", "ork"]
+        ],
+    )
+    llm = LlamaCppLLM(
+        model_path=str(Path.home() / model_path),  # type: ignore
+        n_gpu_layers=-1,
+        n_ctx=1024,
+        structured_output={"format": "json", "schema": Character},
+    )
+    # Change to vLLM as such:
+    # llm = vLLM(
+    #     model="teknium/OpenHermes-2.5-Mistral-7B",
+    #     extra_kwargs={"tensor_parallel_size": 1},
+    #     structured_output={"format": "json", "schema": Character},
+    # )
+
+    text_generation = TextGeneration(
+        name="text_generation_rpg",
+        llm=llm,
+        input_batch_size=8,
+        output_mappings={"model_name": "generation_model"},
+    )
+    load_dataset >> text_generation
+
+
+if __name__ == "__main__":
+    distiset = pipeline.run(
+        parameters={
+            text_generation.name: {
+                "llm": {"generation_kwargs": {"max_new_tokens": 256}}
+            }
+        },
+        use_cache=False,
+    )
+    for num, character in enumerate(distiset["default"]["train"]["generation"]):
+        print(f"Character: {num}")
+        print(character)
+
+# Character: 0
+# {
+# "name": "Gimli",
+# "age": 42,
+# "armor": "plate",
+# "weapon": "axe" }
+# Character: 1
+# {"name":"Gaelen","age":600,"armor":"leather","weapon":"bow"}
+# Character: 2
+# {"name": "John Smith","age": 35,"armor": "leather","weapon": "sword"}
+# Character: 3
+# { "name": "Grug", "age": 35, "armor": "leather", "weapon": "axe"}
+
+
+
+## Defining custom GeneratorTasks
+
+We can define a custom generator task by creating a new subclass of the [`GeneratorTask`][distilabel.steps.tasks.Task] and defining the following:
+
+- `process`: is a method that generates the data based on the [`LLM`][distilabel.llms.LLM] and the `instruction` provided within the class instance, and returns a dictionary with the output data formatted as needed i.e. with the values for the columns in `outputs`. Note that the `inputs` argument is not allowed in this function since this is a [`GeneratorTask`][distilabel.steps.tasks.GeneratorTask]. The signature only expects the `offset` argument, which is used to keep track of the current iteration in the generator.
+
+- `outputs`: is a property that returns a list of strings with the names of the output fields, this property should always include `model_name` as one of the outputs since that's automatically injected from the LLM.
+
+- `format_output`: is a method that receives the output from the [`LLM`][distilabel.llms.LLM] and optionally also the input data (which may be useful to build the output in some scenarios), and returns a dictionary with the output data formatted as needed i.e. with the values for the columns in `outputs`. Note that there's no need to include the `model_name` in the output.%gener

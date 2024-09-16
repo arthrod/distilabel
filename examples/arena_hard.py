@@ -20,7 +20,7 @@ from distilabel.steps.tasks.base import Task
 from distilabel.steps.tasks.typing import ChatType
 from distilabel.steps.typing import StepOutput
 from typing_extensions import override
-
+import distilabel
 
 class ArenaHard(Task):
     """Evaluates two assistant responses using an LLM as judge.

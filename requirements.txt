@@ -1,0 +1,4 @@
+git+https://github.com/argilla-io/distilabel.git@develop#egg=distilabel[openai]
+datasets
+python-dotenv
+datasets
