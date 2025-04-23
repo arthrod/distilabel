@@ -167,7 +167,7 @@ def read_yaml(filename: StrOrPath) -> Dict[str, Any]:
         The data from the file.
     """
     with open(filename, "r") as file:
-        return yaml.load(file, Loader=yaml.FullLoader)
+        return yaml.load(file, Loader=yaml.SafeLoader)
 
 
 class _Serializable:
