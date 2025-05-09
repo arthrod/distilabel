@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import random
 import re
 import logging
 from logging.handlers import QueueHandler, QueueListener
@@ -17,6 +16,7 @@ from distilabel.llms import OpenAILLM
 from distilabel.pipeline import Pipeline
 from distilabel.steps import LoadDataFromDicts, KeepColumns
 from distilabel.steps.tasks import TextGeneration
+import secrets
 
 # Load environment variables
 load_dotenv()
@@ -65,7 +65,7 @@ def generate_mixed_prompts(jsonl_stream, num_prompts: int) -> List[str]:
     for _ in range(num_prompts):
         try:
             jsonl_content = next(jsonl_stream)["full_clause"]
-            preestablished_prompt = random.choice(preestablished_prompts)
+            preestablished_prompt = secrets.choice(preestablished_prompts)
             mixed_prompt = f"You are an expert Haiku writer. {preestablished_prompt.format(jsonl_content)}"
             mixed_prompts.append(mixed_prompt)
         except StopIteration:

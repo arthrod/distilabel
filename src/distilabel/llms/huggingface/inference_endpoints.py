@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import random
 import sys
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
@@ -38,6 +37,7 @@ from distilabel.steps.tasks.typing import (
     StructuredOutputType,
 )
 from distilabel.utils.huggingface import HF_TOKEN_ENV_VAR, get_hf_token
+import secrets
 
 if TYPE_CHECKING:
     from huggingface_hub import AsyncInferenceClient
@@ -400,7 +400,7 @@ class InferenceEndpointsLLM(AsyncLLM, MagpieChatTemplateMixin):
                 return_full_text=return_full_text,
                 # NOTE: here to ensure that the cache is not used and a different response is
                 # generated every time
-                seed=seed or random.randint(0, sys.maxsize),
+                seed=seed or secrets.SystemRandom().randint(0, sys.maxsize),
                 watermark=watermark,
                 grammar=structured_output,  # type: ignore
             )
@@ -436,7 +436,7 @@ class InferenceEndpointsLLM(AsyncLLM, MagpieChatTemplateMixin):
                 presence_penalty=presence_penalty,
                 # NOTE: here to ensure that the cache is not used and a different response is
                 # generated every time
-                seed=seed or random.randint(0, sys.maxsize),
+                seed=seed or secrets.SystemRandom().randint(0, sys.maxsize),
                 stop=stop_sequences,
                 temperature=temperature,
                 tool_choice=tool_choice,  # type: ignore
