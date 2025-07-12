@@ -16,6 +16,7 @@ import re
 from typing import Callable, Dict, List, Tuple
 
 from typing_extensions import TypedDict
+from security import safe_requests
 
 
 class Docstring(TypedDict):
@@ -231,15 +232,13 @@ def get_bibtex(ref: str) -> str:
         ```
     """
     from urllib.parse import quote_plus
-
-    import requests
     from bs4 import BeautifulSoup
 
     if not ref.startswith("https://arxiv.org"):
         raise ValueError(
             f"The url must start with of `https://arxiv.org`, but got: {ref}"
         )
-    response: bytes = requests.get(
+    response: bytes = safe_requests.get(
         rf"https://arxiv2bibtex.org/?q={quote_plus(ref)}&format=bibtex"
     )
     soup = BeautifulSoup(response.content.decode("utf-8"), "html.parser")
