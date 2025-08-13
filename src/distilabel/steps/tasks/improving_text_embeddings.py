@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
 import re
 import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Literal, Optional, Union
+import secrets
 
 if sys.version_info < (3, 9):
     import importlib_resources
@@ -135,7 +135,7 @@ class _EmbeddingDataGeneration(_JSONFormatter, Task, ABC):
         """Loads the Jinja2 template and sets the random seed."""
         super().load()
 
-        random.seed(self.seed)
+        secrets.SystemRandom().seed(self.seed)
 
         _path = str(
             importlib_resources.files("distilabel")
@@ -181,7 +181,7 @@ class _EmbeddingDataGenerator(_JSONFormatter, GeneratorTask, ABC):
         """Loads the Jinja2 template and sets the random seed."""
         super().load()
 
-        random.seed(self.seed)
+        secrets.SystemRandom().seed(self.seed)
 
         _path = str(
             importlib_resources.files("distilabel")
@@ -495,19 +495,17 @@ class GenerateTextRetrievalData(_EmbeddingDataGeneration):
                     task=input["task"],
                     language=self.language,
                     query_type=self.query_type
-                    or random.choice(["extremely long-tail", "long-tail", "common"]),
+                    or secrets.choice(["extremely long-tail", "long-tail", "common"]),
                     query_length=self.query_length
-                    or random.choice(
-                        ["less than 5 words", "5 to 15 words", "at least 10 words"]
+                    or secrets.choice(["less than 5 words", "5 to 15 words", "at least 10 words"]
                     ),
                     difficulty=self.difficulty
-                    or random.choice(["high school", "college", "PhD"]),
+                    or secrets.choice(["high school", "college", "PhD"]),
                     clarity=self.clarity
-                    or random.choice(
-                        ["clear", "understandable with some effort", "ambiguous"]
+                    or secrets.choice(["clear", "understandable with some effort", "ambiguous"]
                     ),
                     num_words=self.num_words
-                    or random.choice([50, 100, 200, 300, 400, 500]),
+                    or secrets.choice([50, 100, 200, 300, 400, 500]),
                 ).strip(),
             }
         ]
@@ -766,10 +764,9 @@ class GenerateTextClassificationData(_EmbeddingDataGeneration):
                     task=input["task"],
                     language=self.language,
                     difficulty=self.difficulty
-                    or random.choice(["high school", "college", "PhD"]),
+                    or secrets.choice(["high school", "college", "PhD"]),
                     clarity=self.clarity
-                    or random.choice(
-                        ["clear", "understandable with some effort", "ambiguous"]
+                    or secrets.choice(["clear", "understandable with some effort", "ambiguous"]
                     ),
                 ).strip(),
             }
@@ -849,11 +846,11 @@ class MonolingualTripletGenerator(_EmbeddingDataGenerator):
                 "role": "user",
                 "content": self._template.render(  # type: ignore
                     language=self.language,
-                    unit=self.unit or random.choice(["sentence", "phrase", "passage"]),
+                    unit=self.unit or secrets.choice(["sentence", "phrase", "passage"]),
                     difficulty=self.difficulty
-                    or random.choice(["elementary school", "high school", "college"]),
-                    high_score=self.high_score or random.choice(["4", "4.5", "5"]),
-                    low_score=self.low_score or random.choice(["2.5", "3", "3.5"]),
+                    or secrets.choice(["elementary school", "high school", "college"]),
+                    high_score=self.high_score or secrets.choice(["4", "4.5", "5"]),
+                    low_score=self.low_score or secrets.choice(["2.5", "3", "3.5"]),
                 ).strip(),
             }
         ]  # type: ignore
@@ -940,11 +937,11 @@ class BitextRetrievalGenerator(_EmbeddingDataGenerator):
                 "content": self._template.render(  # type: ignore
                     source_language=self.source_language,
                     target_language=self.target_language,
-                    unit=self.unit or random.choice(["sentence", "phrase", "passage"]),
+                    unit=self.unit or secrets.choice(["sentence", "phrase", "passage"]),
                     difficulty=self.difficulty
-                    or random.choice(["elementary school", "high school", "college"]),
-                    high_score=self.high_score or random.choice(["4", "4.5", "5"]),
-                    low_score=self.low_score or random.choice(["2.5", "3", "3.5"]),
+                    or secrets.choice(["elementary school", "high school", "college"]),
+                    high_score=self.high_score or secrets.choice(["4", "4.5", "5"]),
+                    low_score=self.low_score or secrets.choice(["2.5", "3", "3.5"]),
                 ).strip(),
             }
         ]  # type: ignore

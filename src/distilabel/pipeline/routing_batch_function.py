@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import inspect
-import random
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, PrivateAttr
@@ -24,6 +23,7 @@ from distilabel.utils.serialization import (
     _get_module_attr,
     _Serializable,
 )
+import secrets
 
 if TYPE_CHECKING:
     from distilabel.pipeline.batch import _Batch
@@ -363,6 +363,6 @@ def sample_n_steps(n: int) -> RoutingBatchFunction:
         description=f"Sample {n} steps from the list of downstream steps."
     )
     def sample_n(steps: List[str]) -> List[str]:
-        return random.sample(steps, n)
+        return secrets.SystemRandom().sample(steps, n)
 
     return sample_n
