@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import Field, PositiveInt
@@ -25,6 +24,7 @@ from distilabel.mixins.runtime_parameters import (
 )
 from distilabel.steps.base import StepInput
 from distilabel.steps.tasks.base import Task
+import secrets
 
 if TYPE_CHECKING:
     from distilabel.steps.tasks.typing import ChatType
@@ -106,7 +106,7 @@ class MagpieBase(RuntimeParametersMixin):
                 )
             elif self.system_prompt is not None:
                 if isinstance(self.system_prompt, list):
-                    system_prompt = random.choice(self.system_prompt)
+                    system_prompt = secrets.choice(self.system_prompt)
                 else:
                     system_prompt = self.system_prompt
                 conversation.append({"role": "system", "content": system_prompt})

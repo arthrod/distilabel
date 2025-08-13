@@ -2,7 +2,6 @@
 
 import json
 import os
-import random
 import re
 from typing import Any, List, Union
 
@@ -12,6 +11,7 @@ from dotenv import load_dotenv
 from distilabel.llms import OpenAILLM
 from distilabel.pipeline import Pipeline
 from distilabel.tasks import SelfInstructTask
+import secrets
 
 # Load environment variables
 load_dotenv()
@@ -126,7 +126,7 @@ def generate_mixed_prompts(jsonl_stream, num_prompts):
     for _ in range(num_prompts):
         try:
             jsonl_content = next(jsonl_stream)["full_clause"]
-            preestablished_prompt = random.choice(preestablished_prompts)
+            preestablished_prompt = secrets.choice(preestablished_prompts)
             mixed_prompt = preestablished_prompt.format(jsonl_content)
             mixed_prompts.append(mixed_prompt)
         except StopIteration:
